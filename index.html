@@ -311,7 +311,6 @@ canvas#game{display:block;width:100%;height:100%;position:fixed;top:0;left:0}
   <div class="mbtn" id="m-sw">⇄</div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
 <script>
 /* ═══════════════════════════════════════════════════════
    SKYWARS ULTIMATE — Professional Rewrite v2
@@ -375,7 +374,7 @@ var MODES={
   speed:{name:'SPEED x2',desc:'Enemigos ultra rápidos'},
   chaos:{name:'CHAOS',desc:'Todo activo, dificultad absurda'},
   pvp:{name:'PVP LOCAL',desc:'Duelo local 1v1'},
-  pvp_online:{name:'PVP ONLINE',desc:'Arena online hasta 5 jugadores (primero a 5 kills)'},
+  pvp_online:{name:'PVP ONLINE',desc:'Online 1v1 · Mejor de 5 rondas'},
   coop_online:{name:'CO-OP ONLINE',desc:'2 jugadores vs enemigos'},
   story:{name:'STORY MODE',desc:'Campaña con capítulos'}
 };
@@ -421,8 +420,8 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival'}};
-var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,sock:null,players:{}};
-var pvpMatch={target:5,my:0,enemy:0,live:true};
+var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:''};
+var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0};
 var storyState={chapter:1,goalWave:6,done:false,kills:0};
 var account={globalXP:0,prestige:0,playSec:0,lastSeen:0,streak:0,mmr:1000,winStreak:0,returnBonus:0,lore:[]};
 var personalChallenge={text:'',target:0,progress:0,reward:0,done:false};
@@ -540,7 +539,7 @@ function renderMeta(){
   var bm=document.getElementById('badgeMeta'); if(bm) bm.textContent='Badges: '+(prog.badges.length?prog.badges.join(', '):'none')+' · Top '+globalRank.length;
   var dm=document.getElementById('dailyMeta'); if(dm) dm.textContent='Daily: '+daily.challenge+' '+daily.progress+'/'+daily.goal+' · Streak '+daily.streak+'d · Map '+mapSet;
   var sm=document.getElementById('storyMeta'); if(sm) sm.textContent='Story: Chapter '+story.chapter+' · Goal Wave '+storyState.goalWave;
-  var om=document.getElementById('onlineMeta'); if(om&&selMode==='pvp_online'){var pc=Object.keys(pvpOnline.players||{}).length||1; om.textContent='PVP ONLINE · Kills '+pvpMatch.my+'/'+pvpMatch.target+' · Players '+pc+'/5 · Sala '+(pvpOnline.room||'-');}
+  var om=document.getElementById('onlineMeta'); if(om&&selMode==='pvp_online'){om.textContent='PVP ONLINE 1v1 · Ronda '+pvpMatch.round+'/'+pvpMatch.maxRounds+' · '+pvpMatch.my+'-'+pvpMatch.enemy+' · Sala '+(pvpOnline.room||'-');}
 }
 function addXP(v){
   runXP+=v;
@@ -692,74 +691,62 @@ function buildAvatarSel(){
 
 
 function resetPvpOnlineMatch(){
-  pvpMatch={target:5,my:0,enemy:0,live:true};
-  pvpOnline.players={};
+  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0};
+  pvpOnline.enemySid='';
 }
-function getClosestOnlineTarget(){
-  var best=null,bd=9999;
-  Object.keys(pvpOnline.players||{}).forEach(function(id){
-    var pl=pvpOnline.players[id]; if(!pl||pl.dead) return;
-    var d=dst(P.x,P.y,pl.x,pl.y); if(d<bd){bd=d;best={id:id,p:pl,d:d};}
-  });
-  return best;
+function startOnlineRound(){
+  var center=platforms.find(function(p){return p.isCenter;})||platforms[0];
+  P.hp=P.mhp; P.sh=0; P.invuln=30; P.x=center.cx-90; P.y=center.y-2; P.vx=0; P.vy=0;
+  pvpState.p2.x=center.cx+90; pvpState.p2.y=center.y-2; pvpState.p2.hp=pvpState.p2.mhp||120;
+  pvpMatch.live=true;
+  announce('⚔ ROUND '+pvpMatch.round+' / '+pvpMatch.maxRounds);
 }
-function connectSocketPvp(room,nick,onFail){
-  if(typeof io==='undefined'){onFail();return;}
-  try{pvpOnline.sock=io({transports:['websocket','polling']});}catch(e){onFail();return;}
-  var sock=pvpOnline.sock;
-  sock.on('connect',function(){
-    sock.emit('pvp_join',{room:room,nick:nick});
-    pvpOnline.transport='socketio'; pvpOnline.connected=true;
-    var m=document.getElementById('onlineMeta'); if(m) m.textContent='Socket.IO conectado · sala '+room;
-  });
-  sock.on('pvp_joined',function(msg){
-    pvpOnline.sid=msg.id||''; pvpOnline.room=room; pvpOnline.players=msg.players||{}; pvpOnline.lastRx=performance.now(); renderMeta();
-  });
-  sock.on('pvp_state',function(msg){
-    if(!msg||!msg.id||msg.id===pvpOnline.sid) return;
-    var pl=pvpOnline.players[msg.id]||{};
-    pl.x=msg.x;pl.y=msg.y;pl.hp=msg.hp;pl.nick=msg.nick||pl.nick||'Rival';pl.dead=!!msg.dead;pl.score=msg.score||0;
-    pvpOnline.players[msg.id]=pl; pvpOnline.lastRx=performance.now();
-  });
-  sock.on('pvp_score',function(msg){
-    if(!msg) return;
-    if(msg.killerId===pvpOnline.sid) pvpMatch.my=msg.killerScore||pvpMatch.my;
-    else pvpMatch.enemy=max(pvpMatch.enemy,msg.killerScore||0);
-    if(msg.winnerId){
-      endGame(msg.winnerId===pvpOnline.sid?'VICTORY':'DEFEAT ONLINE');
-      return;
-    }
-    if(msg.victimId===pvpOnline.sid){
-      P.hp=P.mhp; P.sh=0; P.x=(platforms.find(function(p){return p.isCenter;})||platforms[0]).cx-80; P.y=(platforms.find(function(p){return p.isCenter;})||platforms[0]).y-2; P.invuln=35;
-    }
-    renderMeta();
-  });
-  sock.on('pvp_full',function(){var m=document.getElementById('onlineMeta'); if(m) m.textContent='Sala llena (5/5)';});
-  sock.on('pvp_leave',function(msg){if(msg&&msg.id) delete pvpOnline.players[msg.id];});
-  sock.on('disconnect',function(){if(selMode==='pvp_online'){var m=document.getElementById('onlineMeta'); if(m) m.textContent='Socket desconectado'; pvpOnline.connected=false;}});
+function resolveOnlineRound(winnerSid,roundNum){
+  if(selMode!=='pvp_online') return;
+  var rn=roundNum||pvpMatch.round;
+  if(rn<=pvpMatch.lastResolved) return;
+  pvpMatch.lastResolved=rn;
+  pvpMatch.live=false;
+  if(winnerSid===pvpOnline.sid) pvpMatch.my++; else pvpMatch.enemy++;
+  var need=3;
+  if(pvpMatch.my>=need||pvpMatch.enemy>=need||pvpMatch.round>=pvpMatch.maxRounds){
+    endGame(pvpMatch.my>pvpMatch.enemy?'VICTORY':'DEFEAT ONLINE');
+    return;
+  }
+  pvpMatch.round++;
+  setTimeout(startOnlineRound,900);
+  renderMeta();
 }
 function disconnectOnline(){
-  if(pvpOnline.sock){try{pvpOnline.sock.disconnect();}catch(e){} pvpOnline.sock=null;}
   if(pvpOnline.chan){try{pvpOnline.chan.close();}catch(e){} pvpOnline.chan=null;}
-  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.players={};
+  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid='';
 }
+
 function onOnlinePacket(d){
   if(!d) return;
   if(d.sid&&pvpOnline.sid&&d.sid===pvpOnline.sid) return;
   if(d.type==='state'){
     pvpState.p2.x=d.x||pvpState.p2.x; pvpState.p2.y=d.y||pvpState.p2.y;
     pvpState.p2.name=d.nick||'Rival'; if(typeof d.hp==='number') pvpState.p2.hp=d.hp;
+    if(d.sid) pvpOnline.enemySid=d.sid;
     pvpOnline.lastRx=performance.now(); pvpOnline.connected=true;
+    if(selMode==='pvp_online'&&!pvpMatch.live&&pvpMatch.round===1&&state==='playing') startOnlineRound();
     return;
   }
-  if(d.type==='hit'&&state==='playing'&&selMode==='pvp_online'){ return; }
+  if(d.type==='hit'&&state==='playing'&&selMode==='pvp_online'){
+    if(!pvpMatch.live) return;
+    if(d.targetId&&d.targetId!==pvpOnline.sid) return;
+    P.hp=max(0,P.hp-(d.dmg||12));
+    if(P.hp<=0){ sendOnlineState({type:'round_win',winnerSid:d.sid,round:pvpMatch.round}); resolveOnlineRound(d.sid,pvpMatch.round); }
+    return;
+  }
   if(d.type==='shot'&&selMode==='coop_online'){
     var ta=ang(d.x,d.y,d.tx,d.ty)+rnd(-0.03,0.03);
     bullets.push({x:d.x,y:d.y,vx:cos(ta)*12,vy:sin(ta)*12,dmg:d.dmg||18,life:38,col:'#8df0ff',sz:3,fri:true,kb:1});
     pvpOnline.lastRx=performance.now();
     return;
   }
-  if(d.type==='round_win'&&selMode==='pvp_online'){ return;}
+  if(d.type==='round_win'&&selMode==='pvp_online'){ resolveOnlineRound(d.winnerSid,d.round); return;}
   if(d.type==='kill'){announce('⚔ '+(d.nick||'Rival')+' te derrotó'); if(selMode!=='coop_online'&&selMode!=='pvp_online') endGame('DEFEAT ONLINE');}
 }
 function connectRelay(room,nick,onFail){
@@ -769,8 +756,8 @@ function connectRelay(room,nick,onFail){
   .then(function(j){
     if(!j||!j.sid){onFail();return;}
     pvpOnline.sid=j.sid; pvpOnline.transport='relay'; pvpOnline.connected=true;
-    if(m) m.textContent='Online relay: sala '+room+' como '+nick;
-  }).catch(function(err){ if(err&&err.error==='room_full'){if(m)m.textContent='Sala llena (2/2). Usa otro código'; return;} onFail();});
+    if(m) m.textContent='Online 1v1 conectado · sala '+room+' como '+nick+' (esperando rival)';
+  }).catch(function(err){ if(err&&err.error==='room_full'){if(m)m.textContent='Sala llena (1v1: 2/2). Usa otro código'; return;} onFail();});
 }
 function connectBroadcast(room,nick){
   var m=document.getElementById('onlineMeta');
@@ -801,14 +788,12 @@ function buildOnlineSel(force){
   if(pvpOnline.on&&pvpOnline.room===room&&!force&&pvpOnline.transport!=='none'){m.textContent='Online PvP: sala '+room+' conectada';return;}
   disconnectOnline();
   pvpOnline.room=room; pvpOnline.on=true; pvpOnline.connected=false;
-  if(selMode==='pvp_online'){connectSocketPvp(room,nick,function(){connectRelay(room,nick,function(){connectBroadcast(room,nick);});});}
-  else {connectRelay(room,nick,function(){connectBroadcast(room,nick);});}
+  connectRelay(room,nick,function(){connectBroadcast(room,nick);});
 }
 
 function sendOnlineState(extra){
   if(!pvpOnline.on) return;
   var payload=Object.assign({type:'state',sid:pvpOnline.sid,nick:pvpOnline.nick,x:P.x,y:P.y,hp:P.hp,ts:Date.now()},extra||{});
-  if(pvpOnline.transport==='socketio'&&pvpOnline.sock&&pvpOnline.sock.connected){pvpOnline.sock.emit('pvp_state',payload); return;}
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
     fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})}).catch(function(){});
     return;
@@ -2043,7 +2028,7 @@ function drawVoidFog(){
    ══════════════════════════════════════════ */
 function update(){
   if(state!=='playing') return;
-  pvpState.on=(selMode==='pvp'||selMode==='coop_online');
+  pvpState.on=(selMode==='pvp'||selMode==='coop_online'||selMode==='pvp_online');
   frameN++; uiTick++;
   updateDynamicMusic();
 
@@ -2073,7 +2058,7 @@ function update(){
   if(keys.d||keys.arrowright) mx+=1;
   if(joyAct) mx+=jDX;
   if((keys.shift||keys.k)&&P.dashCD<=0&&P.sta>=25){P.vx+=P.facing*14;P.dashCD=70;P.sta-=25;emitP(P.x,P.y,8,'#66e0ff',3,12,2);}
-  if(pvpOnline.on&&frameN%5===0){sendOnlineState({type:'state',x:P.x,y:P.y,hp:P.hp,dead:P.hp<=0,score:pvpMatch.my}); if(frameN%15===0&&pvpOnline.transport!=='socketio') pollRelay(); var om=document.getElementById('onlineMeta'); if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+' '+(pvpOnline.transport==='socketio'?'socket.io':(pvpOnline.transport==='relay'?'relay':'local'))+': esperando rival en '+pvpOnline.room+'...';}}
+  if(pvpOnline.on&&frameN%5===0){sendOnlineState({type:'state',x:P.x,y:P.y,hp:P.hp,dead:P.hp<=0,score:pvpMatch.my}); if(frameN%15===0) pollRelay(); var om=document.getElementById('onlineMeta'); if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}}
   if(pvpState.on){
     var p2=pvpState.p2;
     if(selMode==='pvp'){
@@ -2083,7 +2068,7 @@ function update(){
       p2.vy+=GRAV; p2.vx*=.9; p2.x=clamp((p2.x||P.x+120)+p2.vx,30,W-30); p2.y=(p2.y||P.y)+p2.vy; if(p2.y>P.y) {p2.y=P.y; p2.vy=0;}
       if(mDown&&dst(P.x,P.y,p2.x,p2.y)<42){p2.hp-=2; if(p2.hp<=0){announce('P1 WINS PVP'); endGame('VICTORY'); return;}}
     }
-    if(selMode==='pvp_online'&&mDown&&frameN%6===0){var tg=getClosestOnlineTarget(); if(tg&&tg.d<80){if(pvpOnline.transport==='socketio'&&pvpOnline.sock){pvpOnline.sock.emit('pvp_hit',{targetId:tg.id,dmg:12});} else {sendOnlineState({type:'hit',dmg:12,targetId:tg.id});}}}
+    if(selMode==='pvp_online'&&mDown&&frameN%6===0&&pvpMatch.live&&pvpOnline.enemySid){var d12=dst(P.x,P.y,pvpState.p2.x,pvpState.p2.y); if(d12<82){sendOnlineState({type:'hit',dmg:12,targetId:pvpOnline.enemySid});}}
   }
 
   var spdMul=(overdriveT>0?1.22:1)*runBuffs.spd*(eventState.toxic?0.72:1)*prog.permSpd;
@@ -2407,6 +2392,7 @@ function initGame(){
   cam.x=P.x;cam.y=P.y-H*.16;
 
   if(selMode==='story'){playCine('CHAPTER '+story.chapter,'Entrando al sector '+mapSet+' · objetivo wave '+storyState.goalWave,1700,function(){announce('🚀 DEPLOYING TO '+mapSet.toUpperCase());slowT=36;slowF=.65;setTimeout(nextWave,700);});}
+  else if(selMode==='pvp_online'){resetPvpOnlineMatch(); announce('⚔ PVP ONLINE 1v1 · espera al rival'); slowT=18; slowF=.8;}
   else {announce('🚀 DEPLOYING TO '+mapSet.toUpperCase());slowT=40; slowF=.6; setTimeout(nextWave,900);} 
 }
 
