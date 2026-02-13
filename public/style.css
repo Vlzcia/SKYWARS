@@ -1,0 +1,32 @@
+:root{
+  --bg:#070b14;
+  --panel:#111827;
+  --line:#263246;
+  --txt:#e7f0ff;
+  --muted:#91a4c3;
+  --ok:#1ee3a1;
+  --warn:#ffcf59;
+  --enemy:#ff5a82;
+  --me:#3ec8ff;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family: Inter, system-ui, Arial, sans-serif;
+  background: radial-gradient(1000px 600px at 20% -20%, #162540, transparent), var(--bg);
+  color:var(--txt);
+}
+.app{max-width:1200px;margin:0 auto;padding:16px;display:grid;grid-template-columns:1fr;gap:12px}
+.panel{background:rgba(17,24,39,.9);border:1px solid var(--line);border-radius:14px;padding:14px}
+h1{margin:0 0 6px;font-size:22px}
+.muted{margin:0 0 12px;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input,button{height:40px;border-radius:10px;border:1px solid var(--line);background:#0b1322;color:var(--txt);padding:0 12px}
+input{min-width:180px}
+button{cursor:pointer;background:#123457;font-weight:700}
+.status,.meta{margin-top:8px}
+.small{font-size:12px;color:var(--muted)}
+.game-wrap{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#04070d}
+canvas{display:block;width:100%;height:auto;max-height:68vh}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:22px;background:rgba(0,0,0,.35);pointer-events:none}
+.hide{display:none}
