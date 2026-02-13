@@ -1,0 +1,23 @@
+{
+  "users": {
+    "Ana": {
+      "joins": 1,
+      "wins": 0,
+      "losses": 0,
+      "lastRoom": "proom"
+    },
+    "Luis": {
+      "joins": 1,
+      "wins": 0,
+      "losses": 0,
+      "lastRoom": "proom"
+    }
+  },
+  "rooms": {
+    "proom": {
+      "joins": 2,
+      "matches": 0,
+      "updatedAt": 1771020579313
+    }
+  }
+}
