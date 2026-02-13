@@ -45,8 +45,9 @@ const server = http.createServer(async (req, res) => {
       const nick = String(body.nick || 'Player').slice(0, 14);
       const sid = randomUUID();
       const r = getRoom(room);
+      if(r.size>=2){ sendJson(res, 409, { ok:false, error:'room_full' }); return; }
       r.set(sid, { nick, queue: [] });
-      sendJson(res, 200, { ok: true, sid, room, nick });
+      sendJson(res, 200, { ok: true, sid, room, nick, players:r.size });
     }catch{
       sendJson(res, 400, { ok: false });
     }
@@ -62,7 +63,7 @@ const server = http.createServer(async (req, res) => {
       const r = rooms.get(room);
       if(!r || !r.has(sid)){ sendJson(res, 404, { ok:false }); return; }
       const sender = r.get(sid);
-      const pkt = Object.assign({}, payload, { nick: sender.nick });
+      const pkt = Object.assign({}, payload, { nick: sender.nick, sid });
       for (const [id, client] of r.entries()) {
         if (id !== sid) client.queue.push(pkt);
       }
@@ -81,6 +82,14 @@ const server = http.createServer(async (req, res) => {
     const c = r.get(sid);
     const events = c.queue.splice(0, 40);
     sendJson(res, 200, { ok:true, events });
+    return;
+  }
+
+
+  if (u.pathname === '/online/status' && req.method === 'GET') {
+    const room = String(u.searchParams.get('room') || '').slice(0, 30);
+    const r = rooms.get(room);
+    sendJson(res, 200, { ok:true, players:r?r.size:0 });
     return;
   }
 
