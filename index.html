@@ -95,6 +95,11 @@ canvas#game{display:block;width:100%;height:100%;position:fixed;top:0;left:0}
 
 /* Screens */
 .scr{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:500;background:rgba(3,8,17,0.96);backdrop-filter:blur(16px);transition:opacity .4s}
+#scrTitle{justify-content:flex-start;overflow-y:auto;padding:24px 14px 32px}
+#scrTitle .ttl{margin-top:4px}
+.title-tools{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:8px 0}
+.ctrl-box{max-height:0;overflow:hidden;transition:max-height .25s ease,opacity .2s ease;opacity:.1}
+.ctrl-box.on{max-height:160px;opacity:1}
 .scr.off{opacity:0;pointer-events:none}
 .ttl{font:900 clamp(30px,9vw,68px) 'Orbitron',sans-serif;letter-spacing:4px;background:linear-gradient(135deg,var(--cyan),var(--pink),var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 20px rgba(0,232,255,0.3))}
 .sub{font:500 clamp(12px,2.5vw,18px) 'Chakra Petch',sans-serif;color:rgba(255,255,255,0.35);letter-spacing:8px;text-transform:uppercase;margin:4px 0 24px}
@@ -252,8 +257,12 @@ canvas#game{display:block;width:100%;height:100%;position:fixed;top:0;left:0}
   <div class="profile-meta" id="profileMeta">LV 1 · XP 0/100 · Tokens 0</div>
   <div class="badges" id="badgeMeta">Badges: none</div>
   <div class="meta" id="titleMeta">Best Score <b>0</b> · Best Wave <b>0</b> · Mode Best <b>0</b></div>
+  <div class="title-tools">
+    <button class="mode-btn" id="toggleControls">Ver controles</button>
+    <button class="mode-btn" id="perfBtn">Modo rendimiento: AUTO</button>
+  </div>
   <button class="btn-go" id="btnPlay">DEPLOY</button>
-  <div class="controls-hint">WASD move · Mouse aim · Click fire · R reload<br>Space jump · Q ability · E interact · Z/X/C supers · V/B/N/M powers · 1-5 weapons · ESC pause · decision cada 3 waves</div>
+  <div class="ctrl-box" id="controlsBox"><div class="controls-hint">WASD move · Mouse aim · Click fire · R reload<br>Space jump · Q ability · E interact · Z/X/C supers · V/B/N/M powers · 1-5 weapons · ESC pause · decision cada 3 waves</div></div>
 </div>
 
 <!-- Game Over -->
@@ -315,8 +324,8 @@ function pick(a){return a[floor(Math.random()*a.length)];}
 /* ---- CONSTANTS ---- */
 const GRAV = 0.45;
 const VOID_DEPTH = 500;
-const MAX_ENEMIES = 30;
-const STAR_N = 120;
+const MAX_ENEMIES = 26;
+const STAR_N = 90;
 
 /* ---- Global state ---- */
 var state = 'title';
@@ -376,7 +385,7 @@ var globalRank=[];
 var uiTick=0;
 var mapSet='Ciudad destruida';
 var mapFx={meteor:1,toxic:0,lowG:0,turret:0};
-var perf={low:false,avg:16};
+var perf={low:false,avg:16,force:false};
 
 var prog={xp:0,lvl:1,tokens:0,coins:0,title:'Rookie',badges:[],skillPts:0,skills:{dmg:0,spd:0,crit:0,def:0},permDmg:1,permSpd:1,crit:0,defMul:1,unlocks:{laser:false,launcher:false,sniper:false,skinRare:false,skinEpic:false,skinLegend:false}};
 var cosmetics={skin:'base',bulletFx:'base',trail:'base',avatar:'zr7'};
@@ -1806,12 +1815,10 @@ function drawBullets(){
     var b=bullets[i];
     var sx=b.x-cam.x+W/2, sy=b.y-cam.y+H/2;
     X.fillStyle=b.col||'#ffe040';
-    X.shadowColor=b.col||'#ffe040';X.shadowBlur=5;
+    if(!perf.low){X.shadowColor=b.col||'#ffe040';X.shadowBlur=5;}
     X.beginPath();X.arc(sx,sy,b.sz,0,TAU);X.fill();
     X.shadowBlur=0;
-    X.globalAlpha=.25;X.strokeStyle=b.col||'#ffe040';X.lineWidth=b.sz*.4;
-    X.beginPath();X.moveTo(sx,sy);X.lineTo(sx-b.vx*2,sy-b.vy*2);X.stroke();
-    X.globalAlpha=1;
+    if(!perf.low){X.globalAlpha=.25;X.strokeStyle=b.col||'#ffe040';X.lineWidth=b.sz*.4;X.beginPath();X.moveTo(sx,sy);X.lineTo(sx-b.vx*2,sy-b.vy*2);X.stroke();X.globalAlpha=1;}
   }
 }
 
@@ -1831,7 +1838,7 @@ function drawPickups(t){
 }
 
 function drawParticles(){
-  for(var i=0;i<particles.length;i+=(perf.low?2:1)){
+  for(var i=0;i<particles.length;i+=(perf.low?3:1)){
     var p=particles[i];
     var sx=p.x-cam.x+W/2, sy=p.y-cam.y+H/2;
     X.fillStyle=p.col;X.globalAlpha=p.life/p.ml;
@@ -1990,7 +1997,7 @@ function update(){
   }
 
   // ---- Bullets ----
-  if(bullets.length>320) bullets.splice(0,bullets.length-320);
+  if(bullets.length>260) bullets.splice(0,bullets.length-260);
   bullets=bullets.filter(function(b){
     b.x+=b.vx*tm; b.y+=b.vy*tm; b.life--;
     if(b.life<=0) return false;
@@ -2021,7 +2028,7 @@ function update(){
   });
 
   // ---- Enemies ----
-  if(enemies.length>64) enemies.splice(0,enemies.length-64);
+  if(enemies.length>52) enemies.splice(0,enemies.length-52);
   enemies=enemies.filter(function(e){
     if(e.dead) return false;
     aiUpdate(e);
@@ -2106,7 +2113,7 @@ function update(){
   });
 
   // ---- Particles ----
-  var pCap=perf.low?300:520; if(particles.length>pCap) particles.splice(0,particles.length-pCap);
+  var pCap=perf.low?220:420; if(particles.length>pCap) particles.splice(0,particles.length-pCap);
   particles=particles.filter(function(p){
     p.x+=p.vx;p.y+=p.vy;p.vy+=p.g;p.vx*=p.fr;p.life--;return p.life>0;
   });
@@ -2306,7 +2313,7 @@ function endGame(reason){
 var lastT=0;
 function loop(ts){
   var dt=min(ts-lastT,33);lastT=ts;
-  perf.avg=perf.avg*.92+dt*.08; perf.low=perf.avg>23; if(perf.low&&frameN%120===0){bullets.length=min(bullets.length,340);}
+  perf.avg=perf.avg*.92+dt*.08; perf.low=perf.force||perf.avg>22; if(perf.low&&frameN%90===0){bullets.length=min(bullets.length,280);}
   update();draw(ts);
   requestAnimationFrame(loop);
 }
@@ -2344,6 +2351,8 @@ document.getElementById('btnRetry').addEventListener('click',function(){
 });
 var sc=document.getElementById('shopContinue');if(sc)sc.addEventListener('click',function(){document.getElementById('shop').classList.remove('on');state='playing';shopPending=false;spawnWaveNow();});
 var cb=document.getElementById('connectBtn'); if(cb) cb.addEventListener('click',function(){buildOnlineSel(true);});
+var tc=document.getElementById('toggleControls'); if(tc) tc.addEventListener('click',function(){var box=document.getElementById('controlsBox'); if(!box) return; box.classList.toggle('on'); tc.textContent=box.classList.contains('on')?'Ocultar controles':'Ver controles'; if(box.classList.contains('on')) box.scrollIntoView({behavior:'smooth',block:'nearest'});});
+var pb=document.getElementById('perfBtn'); if(pb) pb.addEventListener('click',function(){perf.force=!perf.force; pb.textContent='Modo rendimiento: '+(perf.force?'ON':'AUTO');});
 
 requestAnimationFrame(loop);
 </script>
