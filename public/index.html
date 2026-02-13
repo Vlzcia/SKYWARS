@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Skywars Online PvP 1v1</title>
+  <link rel="stylesheet" href="/public/style.css" />
+</head>
+<body>
+  <main class="app">
+    <section class="panel">
+      <h1>SKYWARS ONLINE PVP</h1>
+      <p class="muted">1v1 · Mejor de 5 rondas · Código de sala + usuario</p>
+      <div class="row">
+        <input id="nick" placeholder="Tu usuario" maxlength="14" />
+        <input id="room" placeholder="Código sala" maxlength="32" />
+        <button id="connect">Conectar</button>
+      </div>
+      <div class="status" id="status">Desconectado</div>
+      <div class="meta" id="score">Ronda 1/5 · Tú 0 - 0 Rival</div>
+      <div class="meta" id="controls">Mover: WASD/Flechas · Disparar: Click · Dash: Shift</div>
+      <div class="meta small">Tip: abre esta misma URL en dos PCs o navegadores, escribe mismo código y conecta.</div>
+    </section>
+
+    <section class="game-wrap">
+      <canvas id="game" width="980" height="560"></canvas>
+      <div class="overlay" id="overlay">Conecta para iniciar</div>
+    </section>
+  </main>
+
+  <script src="/public/game.js"></script>
+</body>
+</html>
