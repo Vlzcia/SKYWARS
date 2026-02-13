@@ -17,6 +17,13 @@ const MIME = {
 
 const rooms = new Map(); // room -> Map(sid -> {nick,queue:[]})
 
+const DB_FILE = path.join(ROOT, 'data', 'online-db.json');
+let db = { users:{}, rooms:{} };
+try{ db = JSON.parse(fs.readFileSync(DB_FILE,'utf8')); }catch(e){}
+function saveDb(){
+  try{ fs.mkdirSync(path.dirname(DB_FILE), { recursive:true }); fs.writeFileSync(DB_FILE, JSON.stringify(db,null,2)); }catch(e){}
+}
+
 function sendJson(res, code, obj){
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -49,6 +56,11 @@ const server = http.createServer(async (req, res) => {
       const r = getRoom(room);
       if(r.size>=2){ sendJson(res, 409, { ok:false, error:'room_full' }); return; }
       r.set(sid, { nick, queue: [], lastSeen: Date.now() });
+      db.users[nick] = db.users[nick] || { joins:0, wins:0, losses:0, lastRoom:'' };
+      db.users[nick].joins += 1; db.users[nick].lastRoom = room;
+      db.rooms[room] = db.rooms[room] || { joins:0, matches:0, updatedAt:0 };
+      db.rooms[room].joins += 1; db.rooms[room].updatedAt = Date.now();
+      saveDb();
       sendJson(res, 200, { ok: true, sid, room, nick, players:r.size });
     }catch{
       sendJson(res, 400, { ok: false });
@@ -67,6 +79,17 @@ const server = http.createServer(async (req, res) => {
       const sender = r.get(sid);
       sender.lastSeen = Date.now();
       const pkt = Object.assign({}, payload, { nick: sender.nick, sid, serverTs:Date.now() });
+      if(payload && payload.type==='round_win'){
+        const roomDb = db.rooms[room] || (db.rooms[room]={ joins:0,matches:0,updatedAt:0 });
+        roomDb.matches += 1; roomDb.updatedAt = Date.now();
+        const winner = String(payload.winnerSid||'');
+        for (const [id, client] of r.entries()) {
+          db.users[client.nick] = db.users[client.nick] || { joins:0,wins:0,losses:0,lastRoom:room };
+          if(id===winner) db.users[client.nick].wins += 1;
+          else db.users[client.nick].losses += 1;
+        }
+        saveDb();
+      }
       for (const [id, client] of r.entries()) {
         if (id !== sid) client.queue.push(pkt);
       }
@@ -92,14 +115,15 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/online/status' && req.method === 'GET') {
     const room = sanitizeRoom(u.searchParams.get('room') || '');
     const r = rooms.get(room);
-    sendJson(res, 200, { ok:true, players:r?r.size:0 });
+    sendJson(res, 200, { ok:true, players:r?r.size:0, knownUsers:Object.keys(db.users).length });
     return;
   }
 
   // static
   let pathname = decodeURIComponent(u.pathname);
-  if (pathname === '/') pathname = '/index.html';
-  const file = path.join(ROOT, pathname.replace(/^\/+/, ''));
+  if (pathname === '/') pathname = '/public/index.html';
+  const rel = pathname.replace(/^\/+/, '');
+  const file = path.join(ROOT, rel);
   if (!file.startsWith(ROOT)) { res.writeHead(403); res.end('Forbidden'); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end('Not Found'); return; }
