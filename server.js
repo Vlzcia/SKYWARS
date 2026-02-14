@@ -17,6 +17,8 @@ const MIME = {
 
 const rooms = new Map(); // room -> Map(sid -> {nick,queue:[]})
 const REJOIN_GRACE_MS = 90000;
+const ONLINE_WORLD_W = 1600;
+const ONLINE_WORLD_H = 900;
 
 const DB_FILE = path.join(ROOT, 'data', 'online-db.json');
 let db = { users:{}, rooms:{} };
@@ -138,11 +140,13 @@ const server = http.createServer(async (req, res) => {
       if(payload && payload.type==='state'){
         const px = Number(payload.x), py=Number(payload.y);
         if(Number.isFinite(px) && Number.isFinite(py)){
-          sender.lastState={x:px,y:py,ts:now};
+          const sx = Math.max(20, Math.min(ONLINE_WORLD_W-20, px));
+          const sy = Math.max(0, Math.min(ONLINE_WORLD_H + 260, py));
+          sender.lastState={x:sx,y:sy,ts:now};
           sender.stateHist = sender.stateHist || [];
-          sender.stateHist.push({x:px,y:py,ts:now});
+          sender.stateHist.push({x:sx,y:sy,ts:now});
           if(sender.stateHist.length>45) sender.stateHist.splice(0, sender.stateHist.length-45);
-          ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(px*2)/2, y:Math.round(py*2)/2, serverTs:now };
+          ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(sx*2)/2, y:Math.round(sy*2)/2, serverTs:now };
         }
       }
       if(payload && payload.type==='shot'){
