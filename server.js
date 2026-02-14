@@ -138,16 +138,17 @@ const server = http.createServer(async (req, res) => {
       sender.lastSeen = now;
       if(payload && payload.type==='ping'){ sendJson(res, 200, { ok:true, pongTs:now }); return; }
       if(payload && payload.type==='state'){
+        const prev = sender.lastState || { x: ONLINE_WORLD_W*0.5, y: ONLINE_WORLD_H*0.72, ts: now };
         const px = Number(payload.x), py=Number(payload.y);
-        if(Number.isFinite(px) && Number.isFinite(py)){
-          const sx = Math.max(20, Math.min(ONLINE_WORLD_W-20, px));
-          const sy = Math.max(0, Math.min(ONLINE_WORLD_H + 260, py));
-          sender.lastState={x:sx,y:sy,ts:now};
-          sender.stateHist = sender.stateHist || [];
-          sender.stateHist.push({x:sx,y:sy,ts:now});
-          if(sender.stateHist.length>45) sender.stateHist.splice(0, sender.stateHist.length-45);
-          ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(sx*2)/2, y:Math.round(sy*2)/2, serverTs:now };
-        }
+        const rx = Number.isFinite(px) ? px : prev.x;
+        const ry = Number.isFinite(py) ? py : prev.y;
+        const sx = Math.max(20, Math.min(ONLINE_WORLD_W-20, rx));
+        const sy = Math.max(0, Math.min(ONLINE_WORLD_H + 260, ry));
+        sender.lastState={x:sx,y:sy,ts:now};
+        sender.stateHist = sender.stateHist || [];
+        sender.stateHist.push({x:sx,y:sy,ts:now});
+        if(sender.stateHist.length>45) sender.stateHist.splice(0, sender.stateHist.length-45);
+        ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(sx*2)/2, y:Math.round(sy*2)/2, serverTs:now };
       }
       if(payload && payload.type==='shot'){
         const sx=Number(payload.x), sy=Number(payload.y);
