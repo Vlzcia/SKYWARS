@@ -57,6 +57,7 @@ function collectBody(req){
 }
 function sanitizeRoom(v){ return String(v || 'room1').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,32) || 'room1'; }
 function sanitizeNick(v){ return String(v || 'Player').replace(/[^\w\- ]/g,'').slice(0,14) || 'Player'; }
+function sanitizeChat(v){ return String(v||'').replace(/[\r\n\t]+/g,' ').slice(0,140).trim(); }
 function findClientByNick(roomMap, nick){
   for (const [id, c] of roomMap.entries()) if (c.nick===nick) return [id,c];
   return null;
@@ -76,7 +77,7 @@ const server = http.createServer(async (req, res) => {
       const sameNick = findClientByNick(r, nick);
       if (sameNick && now - sameNick[1].lastSeen < REJOIN_GRACE_MS) { sendJson(res, 409, { ok:false, error:'nick_in_use' }); return; }
       if(r.size>=2){ sendJson(res, 409, { ok:false, error:'room_full' }); return; }
-      r.set(sid, { nick, queue: [], lastSeen: now, lastShotTs:0, lastState:null });
+      r.set(sid, { nick, queue: [], lastSeen: now, lastShotTs:0, lastChatTs:0, lastState:null });
       db.users[nick] = db.users[nick] || { joins:0, wins:0, losses:0, lastRoom:'' };
       db.users[nick].joins += 1; db.users[nick].lastRoom = room;
       db.rooms[room] = db.rooms[room] || { joins:0, matches:0, updatedAt:0 };
@@ -115,7 +116,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await collectBody(req) || '{}');
       const room = sanitizeRoom(body.room || '');
       const sid = String(body.sid || '');
-      const payload = body.payload || {};
+      let payload = body.payload || {};
       const r = rooms.get(room);
       if(!r || !r.has(sid)){ sendJson(res, 404, { ok:false }); return; }
       const sender = r.get(sid);
@@ -139,6 +140,13 @@ const server = http.createServer(async (req, res) => {
       if(payload && payload.type==='hit'){
         const targetSid = String(payload.targetId||'');
         if(!targetSid || !r.has(targetSid) || targetSid===sid){ sendJson(res, 422, { ok:false, error:'invalid_hit_target' }); return; }
+      }
+      if(payload && payload.type==='chat'){
+        const txt=sanitizeChat(payload.text);
+        if(!txt){ sendJson(res, 422, { ok:false, error:'invalid_chat' }); return; }
+        if(now-(sender.lastChatTs||0)<400){ sendJson(res, 429, { ok:false, error:'chat_rate_limited' }); return; }
+        sender.lastChatTs=now;
+        payload={ type:'chat', text:txt };
       }
       const pkt = Object.assign({}, payload, { nick: sender.nick, sid, serverTs:now });
       if(payload && payload.type==='round_win'){
