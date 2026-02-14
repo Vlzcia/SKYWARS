@@ -459,7 +459,7 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
-var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:110,snapMax:40,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0};
+var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var onboarding={seen:false};
@@ -764,7 +764,7 @@ function buildAvatarSel(){
 function resetPvpOnlineMatch(){
   pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0};
   pvpOnline.enemySid='';
-  pvpOnline.snapshots=[]; pvpOnline.netPts=[]; pvpOnline.packetLoss=0; pvpOnline.jitterMs=0; pvpOnline.lastRemoteSeq=0;
+  pvpOnline.snapshots=[]; pvpOnline.netPts=[]; pvpOnline.packetLoss=0; pvpOnline.jitterMs=0; pvpOnline.lastRemoteSeq=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0;
   pvpStats.shots=0; pvpStats.hits=0; pvpStats.kills=0; pvpStats.deaths=0; pvpStats.hitFx=0;
   pvpMatch.afkTimer=8; if(pvpMatch.nextRoundTimer) clearTimeout(pvpMatch.nextRoundTimer); pvpMatch.nextRoundTimer=0;
 }
@@ -806,7 +806,7 @@ function resolveOnlineRound(winnerSid,roundNum){
 }
 function disconnectOnline(){
   if(pvpOnline.chan){try{pvpOnline.chan.close();}catch(e){} pvpOnline.chan=null;}
-  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0;
+  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0;
 }
 
 function pushRemoteSnapshot(d){
@@ -826,7 +826,8 @@ function pushRemoteSnapshot(d){
     nick:d.nick||pvpState.p2.name||'Rival',
     seq:typeof d.seq==='number'?d.seq:0,
     recvTs:now,
-    serverTs:typeof d.serverTs==='number'?d.serverTs:0
+    serverTs:typeof d.serverTs==='number'?d.serverTs:0,
+    simTs:typeof d.serverTs==='number'&&d.serverTs>0?d.serverTs:Date.now()
   };
   var snaps=pvpOnline.snapshots;
   if(snaps.length){
@@ -846,6 +847,7 @@ function pushRemoteSnapshot(d){
     pvpOnline.lastRemoteSeq=max(pvpOnline.lastRemoteSeq||0,snap.seq);
   }
   snaps.push(snap);
+  pvpOnline.lastRemoteTs=snap.simTs;
   if(snaps.length>pvpOnline.snapMax) snaps.splice(0,snaps.length-pvpOnline.snapMax);
 }
 
@@ -853,20 +855,18 @@ function applyRemoteSmoothing(){
   var snaps=pvpOnline.snapshots;
   if(!snaps||!snaps.length) return;
   var p2=pvpState.p2;
-  var rt=performance.now()-pvpOnline.renderDelay;
-  while(snaps.length>=3&&snaps[1].recvTs<=rt) snaps.shift();
+  var rt=Date.now()-pvpOnline.renderDelay;
+  while(snaps.length>=3&&snaps[1].simTs<=rt) snaps.shift();
 
-  if(snaps.length>=2&&snaps[0].recvTs<=rt&&rt<=snaps[1].recvTs){
+  var tx=p2.x, ty=p2.y, tvx=p2.vx||0, tvy=p2.vy||0;
+  var base=null;
+  if(snaps.length>=2&&snaps[0].simTs<=rt&&rt<=snaps[1].simTs){
     var a=snaps[0], b=snaps[1];
-    var span=max(1,b.recvTs-a.recvTs);
-    var t=clamp((rt-a.recvTs)/span,0,1);
-    var tx=lerp(a.x,b.x,t), ty=lerp(a.y,b.y,t);
-    p2.x=lerp(p2.x||tx,tx,0.65);
-    var stepY=ty-(p2.y||ty);
-    if(p2.grounded===false && abs(stepY)>18) stepY=stepY>0?18:-18;
-    p2.y=(p2.y||ty)+stepY;
+    var span=max(1,b.simTs-a.simTs);
+    var t=clamp((rt-a.simTs)/span,0,1);
+    tx=lerp(a.x,b.x,t); ty=lerp(a.y,b.y,t);
+    tvx=lerp(a.vx,b.vx,t); tvy=lerp(a.vy,b.vy,t);
     p2.hp=lerp(a.hp,b.hp,t);
-    p2.vy=lerp(a.vy,b.vy,t);
     p2.anim=lerp(a.anim,b.anim,t);
     p2.aimX=lerp(a.aimX,b.aimX,t);
     p2.aimY=lerp(a.aimY,b.aimY,t);
@@ -874,27 +874,48 @@ function applyRemoteSmoothing(){
     p2.facing=t<0.5?a.facing:b.facing;
     p2.wi=t<0.5?a.wi:b.wi;
     p2.name=t<0.5?a.nick:b.nick;
-    return;
+    base=b;
+  } else {
+    var last=snaps[snaps.length-1];
+    var prev=snaps.length>1?snaps[snaps.length-2]:last;
+    var dt=max(1,last.simTs-prev.simTs);
+    var vx=(last.x-prev.x)/dt;
+    if(!Number.isFinite(vx) || abs(vx)<0.001) vx = (last.vx||0);
+    var vy=(last.y-prev.y)/dt;
+    if(!Number.isFinite(vy) || abs(vy)<0.001) vy = (last.vy||0);
+    var extra=clamp(rt-last.simTs,0,pvpOnline.maxExtrapMs||140);
+    tx=last.x+vx*extra;
+    ty=last.y+vy*extra;
+    tvx=last.vx||vx;
+    tvy=last.vy||vy;
+    p2.hp=last.hp;
+    p2.anim=last.anim;
+    p2.aimX=last.aimX;
+    p2.aimY=last.aimY;
+    p2.grounded=last.grounded;
+    p2.facing=last.facing;
+    p2.wi=last.wi;
+    p2.name=last.nick;
+    base=last;
   }
 
-  var last=snaps[snaps.length-1];
-  var prev=snaps.length>1?snaps[snaps.length-2]:last;
-  var dt=max(1,last.recvTs-prev.recvTs);
-  var vx=(last.x-prev.x)/dt;
-  if(!Number.isFinite(vx) || abs(vx)<0.001) vx = (last.vx||0);
-  var vy=(last.y-prev.y)/dt;
-  var extra=clamp(rt-last.recvTs,0,120);
-  p2.x=last.x+vx*extra;
-  p2.y=last.y+vy*extra;
-  p2.hp=last.hp;
-  p2.vy=last.vy;
-  p2.anim=last.anim;
-  p2.aimX=last.aimX;
-  p2.aimY=last.aimY;
-  p2.grounded=last.grounded;
-  p2.facing=last.facing;
-  p2.wi=last.wi;
-  p2.name=last.nick;
+  var dx=tx-(p2.x||tx), dy=ty-(p2.y||ty);
+  var dist=hypot(dx,dy);
+  if(dist>320){
+    p2.x=tx; p2.y=ty;
+  } else {
+    var posLerp=dist>120?0.35:0.18;
+    p2.x=(p2.x||tx)+dx*posLerp;
+    p2.y=(p2.y||ty)+dy*posLerp;
+  }
+  p2.vx=lerp(p2.vx||0,tvx,0.2);
+  p2.vy=lerp(p2.vy||0,tvy,0.2);
+
+  if(base){
+    if(base.grounded===false && abs(ty-p2.y)>24){
+      p2.y += clamp(ty-p2.y,-24,24);
+    }
+  }
 }
 
 function pvpAddHitFeedback(dmg){
@@ -2473,7 +2494,19 @@ function update(){
   if(canControl&& (keys.d||keys.arrowright)) mx+=1;
   if(canControl&& joyAct) mx+=jDX;
   if(canControl&&(keys.shift||keys.k)&&P.dashCD<=0&&P.sta>=25){P.vx+=P.facing*14;P.dashCD=70;P.sta-=25;emitP(P.x,P.y,8,'#66e0ff',3,12,2);}
-  if(pvpOnline.on&&frameN%8===0){pvpOnline.stateSeq=(pvpOnline.stateSeq||0)+1;sendOnlineState({type:'state',seq:pvpOnline.stateSeq,x:round(P.x*10)/10,y:round(P.y*10)/10,vx:round(P.vx*10)/10,hp:round(P.hp),dead:P.hp<=0,score:pvpMatch.my,grounded:P.grounded,anim:round(P.anim*100)/100,facing:P.facing,vy:round(P.vy*10)/10,aimX:round(mWorld.x),aimY:round(mWorld.y),wi:P.wi}); if(frameN%16===0) pollRelay(); if(frameN%120===0) sendPingSample(); var om=document.getElementById('onlineMeta'); if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}}
+  if(pvpOnline.on){
+    var tickMs=1000/max(8,(pvpOnline.sendHz||20));
+    pvpOnline.sendAcc=(pvpOnline.sendAcc||0)+(window.__frameDtMs||16.6);
+    while(pvpOnline.sendAcc>=tickMs){
+      pvpOnline.sendAcc-=tickMs;
+      pvpOnline.stateSeq=(pvpOnline.stateSeq||0)+1;
+      sendOnlineState({type:'state',seq:pvpOnline.stateSeq,x:round(P.x*10)/10,y:round(P.y*10)/10,vx:round(P.vx*10)/10,hp:round(P.hp),dead:P.hp<=0,score:pvpMatch.my,grounded:P.grounded,anim:round(P.anim*100)/100,facing:P.facing,vy:round(P.vy*10)/10,aimX:round(mWorld.x),aimY:round(mWorld.y),wi:P.wi,clientTs:Date.now()});
+    }
+    if(frameN%2===0) pollRelay();
+    if(frameN%120===0) sendPingSample();
+    var om=document.getElementById('onlineMeta');
+    if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}
+  }
   if((selMode==='pvp_online'||selMode==='coop_online')&&pvpOnline.on) applyRemoteSmoothing();
   if(selMode==='pvp_online'&&pvpOnline.on) applyLocalCorrections();
   if(selMode==='pvp_online'&&pvpMatch.live&&pvpOnline.enemySid){
@@ -2901,7 +2934,7 @@ function endGame(reason){
 
 var lastT=0;
 function loop(ts){
-  var dt=min(ts-lastT,33);lastT=ts;
+  var dt=min(ts-lastT,33);lastT=ts; window.__frameDtMs=dt;
   perf.avg=perf.avg*.92+dt*.08; perf.low=perf.force||perf.avg>21; if(perf.low&&frameN%70===0){bullets.length=min(bullets.length,180); particles.length=min(particles.length,220);}
   update();draw(ts);
   requestAnimationFrame(loop);
@@ -2957,3 +2990,4 @@ requestAnimationFrame(loop);
 
 
 </body></html>
+
