@@ -16,6 +16,7 @@ const MIME = {
 };
 
 const rooms = new Map(); // room -> Map(sid -> {nick,queue:[]})
+const REJOIN_GRACE_MS = 90000;
 
 const DB_FILE = path.join(ROOT, 'data', 'online-db.json');
 let db = { users:{}, rooms:{} };
@@ -56,6 +57,10 @@ function collectBody(req){
 }
 function sanitizeRoom(v){ return String(v || 'room1').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,32) || 'room1'; }
 function sanitizeNick(v){ return String(v || 'Player').replace(/[^\w\- ]/g,'').slice(0,14) || 'Player'; }
+function findClientByNick(roomMap, nick){
+  for (const [id, c] of roomMap.entries()) if (c.nick===nick) return [id,c];
+  return null;
+}
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -66,18 +71,41 @@ const server = http.createServer(async (req, res) => {
       const room = sanitizeRoom(body.room);
       const nick = sanitizeNick(body.nick);
       const sid = randomUUID();
+      const now = Date.now();
       const r = getRoom(room);
+      const sameNick = findClientByNick(r, nick);
+      if (sameNick && now - sameNick[1].lastSeen < REJOIN_GRACE_MS) { sendJson(res, 409, { ok:false, error:'nick_in_use' }); return; }
       if(r.size>=2){ sendJson(res, 409, { ok:false, error:'room_full' }); return; }
-      r.set(sid, { nick, queue: [], lastSeen: Date.now() });
+      r.set(sid, { nick, queue: [], lastSeen: now, lastShotTs:0, lastState:null });
       db.users[nick] = db.users[nick] || { joins:0, wins:0, losses:0, lastRoom:'' };
       db.users[nick].joins += 1; db.users[nick].lastRoom = room;
       db.rooms[room] = db.rooms[room] || { joins:0, matches:0, updatedAt:0 };
-      db.rooms[room].joins += 1; db.rooms[room].updatedAt = Date.now();
+      db.rooms[room].joins += 1; db.rooms[room].updatedAt = now;
       saveDb();
       sendJson(res, 200, { ok: true, sid, room, nick, players:r.size });
     }catch(err){
       const code = err && err.code === 413 ? 413 : 400;
       sendJson(res, code, { ok: false, error: code===413 ? 'payload_too_large' : 'bad_request' });
+    }
+    return;
+  }
+
+
+  if (u.pathname === '/online/rejoin' && req.method === 'POST') {
+    try{
+      const body = JSON.parse(await collectBody(req) || '{}');
+      const room = sanitizeRoom(body.room);
+      const nick = sanitizeNick(body.nick);
+      const r = getRoom(room);
+      const found = findClientByNick(r, nick);
+      if (!found) { sendJson(res, 404, { ok:false, error:'session_not_found' }); return; }
+      const [sid, c] = found;
+      if (Date.now() - c.lastSeen > REJOIN_GRACE_MS) { sendJson(res, 404, { ok:false, error:'session_expired' }); return; }
+      c.lastSeen = Date.now();
+      sendJson(res, 200, { ok:true, sid, room, nick, players:r.size });
+    }catch(err){
+      const code = err && err.code === 413 ? 413 : 400;
+      sendJson(res, code, { ok:false, error: code===413 ? 'payload_too_large' : 'bad_request' });
     }
     return;
   }
@@ -91,8 +119,28 @@ const server = http.createServer(async (req, res) => {
       const r = rooms.get(room);
       if(!r || !r.has(sid)){ sendJson(res, 404, { ok:false }); return; }
       const sender = r.get(sid);
-      sender.lastSeen = Date.now();
-      const pkt = Object.assign({}, payload, { nick: sender.nick, sid, serverTs:Date.now() });
+      const now = Date.now();
+      sender.lastSeen = now;
+      if(payload && payload.type==='ping'){ sendJson(res, 200, { ok:true, pongTs:now }); return; }
+      if(payload && payload.type==='state'){
+        const px = Number(payload.x), py=Number(payload.y);
+        if(Number.isFinite(px) && Number.isFinite(py)) sender.lastState={x:px,y:py,ts:now};
+      }
+      if(payload && payload.type==='shot'){
+        const sx=Number(payload.x), sy=Number(payload.y);
+        if(!Number.isFinite(sx)||!Number.isFinite(sy)){ sendJson(res, 422, { ok:false, error:'invalid_shot' }); return; }
+        if(now - (sender.lastShotTs||0) < 35){ sendJson(res, 429, { ok:false, error:'shot_rate_limited' }); return; }
+        if(sender.lastState){
+          const dx=sx-sender.lastState.x, dy=sy-sender.lastState.y;
+          if(dx*dx+dy*dy > 260*260){ sendJson(res, 422, { ok:false, error:'invalid_shot_origin' }); return; }
+        }
+        sender.lastShotTs = now;
+      }
+      if(payload && payload.type==='hit'){
+        const targetSid = String(payload.targetId||'');
+        if(!targetSid || !r.has(targetSid) || targetSid===sid){ sendJson(res, 422, { ok:false, error:'invalid_hit_target' }); return; }
+      }
+      const pkt = Object.assign({}, payload, { nick: sender.nick, sid, serverTs:now });
       if(payload && payload.type==='round_win'){
         const roomDb = db.rooms[room] || (db.rooms[room]={ joins:0,matches:0,updatedAt:0 });
         roomDb.matches += 1; roomDb.updatedAt = Date.now();
@@ -104,8 +152,12 @@ const server = http.createServer(async (req, res) => {
         }
         saveDb();
       }
-      for (const [id, client] of r.entries()) {
-        if (id !== sid) client.queue.push(pkt);
+      if(payload && payload.type==='hit_confirm' && payload.toSid && r.has(String(payload.toSid))){
+        r.get(String(payload.toSid)).queue.push(pkt);
+      } else {
+        for (const [id, client] of r.entries()) {
+          if (id !== sid) client.queue.push(pkt);
+        }
       }
       sendJson(res, 200, { ok: true });
     }catch(err){
@@ -136,7 +188,14 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/online/status' && req.method === 'GET') {
     const room = sanitizeRoom(u.searchParams.get('room') || '');
     const r = rooms.get(room);
-    sendJson(res, 200, { ok:true, players:r?r.size:0, knownUsers:Object.keys(db.users).length });
+    let staleMs = null;
+    if(r && r.size>=1){
+      const now = Date.now();
+      let maxAge = 0;
+      for (const c of r.values()) maxAge = Math.max(maxAge, now - c.lastSeen);
+      staleMs = maxAge;
+    }
+    sendJson(res, 200, { ok:true, players:r?r.size:0, knownUsers:Object.keys(db.users).length, staleMs });
     return;
   }
 
