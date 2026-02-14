@@ -2898,12 +2898,8 @@ var sfxBtn=document.getElementById('sfxBtn');if(sfxBtn)sfxBtn.addEventListener('
 
 document.getElementById('btnPlay').addEventListener('click',function(){
   unlockAudio();
-  if(!onboarding.seen){
-    if(openTutorial()) return;
-    // fail-safe: if tutorial markup was removed in a manual copy/paste, start the game anyway
-    closeTutorial(true);
-    return;
-  }
+  // UX hotfix: DEPLOY must always start immediately (offline and online)
+  if(!onboarding.seen){ onboarding.seen=true; saveMeta(); }
   closeTutorial(true);
 });
 document.getElementById('btnRetry').addEventListener('click',function(){
