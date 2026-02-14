@@ -1176,16 +1176,26 @@ function sendOnlineState(extra){
   if(payload.type==='hit' && !payload.shotTs) payload.shotTs=Date.now();
   if(payload.type==='hit' && !payload.maxDist) payload.maxDist=90;
   if(payload.type==='state'){
-    var prev=pvpOnline.lastSentState||{};
-    var delta={type:'state'};
-    var changed=0;
-    for(var k in payload){
-      if(k==='type'||k==='sid'||k==='nick') continue;
-      if(prev[k]!==payload[k]){ delta[k]=payload[k]; changed++; }
-    }
-    if(!changed) return;
-    pvpOnline.lastSentState=Object.assign({}, prev, delta);
-    payload=delta;
+    // Keep authoritative kinematics always present to avoid divergent/partial simulation on receiver/server.
+    payload={
+      type:'state',
+      seq:Number(payload.seq||0),
+      x:Number(payload.x||0),
+      y:Number(payload.y||0),
+      vx:Number(payload.vx||0),
+      vy:Number(payload.vy||0),
+      hp:Number(payload.hp||0),
+      grounded:!!payload.grounded,
+      anim:Number(payload.anim||0),
+      facing:Number(payload.facing||1),
+      aimX:Number(payload.aimX||0),
+      aimY:Number(payload.aimY||0),
+      wi:Number(payload.wi||0),
+      dead:!!payload.dead,
+      score:Number(payload.score||0),
+      clientTs:Number(payload.clientTs||Date.now())
+    };
+    pvpOnline.lastSentState=payload;
   }
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
     fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})})
@@ -2990,4 +3000,3 @@ requestAnimationFrame(loop);
 
 
 </body></html>
-
