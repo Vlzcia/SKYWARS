@@ -432,7 +432,7 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
-var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:110,snapMax:40,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[]};
+var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:110,snapMax:40,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var storyState={chapter:1,goalWave:6,done:false,kills:0};
@@ -750,7 +750,7 @@ function resolveOnlineRound(winnerSid,roundNum){
 }
 function disconnectOnline(){
   if(pvpOnline.chan){try{pvpOnline.chan.close();}catch(e){} pvpOnline.chan=null;}
-  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false;
+  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0;
 }
 
 function pushRemoteSnapshot(d){
@@ -804,8 +804,11 @@ function applyRemoteSmoothing(){
     var a=snaps[0], b=snaps[1];
     var span=max(1,b.recvTs-a.recvTs);
     var t=clamp((rt-a.recvTs)/span,0,1);
-    p2.x=lerp(a.x,b.x,t);
-    p2.y=lerp(a.y,b.y,t);
+    var tx=lerp(a.x,b.x,t), ty=lerp(a.y,b.y,t);
+    p2.x=lerp(p2.x||tx,tx,0.65);
+    var stepY=ty-(p2.y||ty);
+    if(p2.grounded===false && abs(stepY)>18) stepY=stepY>0?18:-18;
+    p2.y=(p2.y||ty)+stepY;
     p2.hp=lerp(a.hp,b.hp,t);
     p2.vy=lerp(a.vy,b.vy,t);
     p2.anim=lerp(a.anim,b.anim,t);
@@ -930,6 +933,20 @@ function drawNetGraph(){
 }
 
 
+
+function applyLocalCorrections(){
+  if(abs(pvpOnline.corrX||0)>0.02){
+    var stepX=(pvpOnline.corrX||0)*0.22;
+    P.x += stepX;
+    pvpOnline.corrX -= stepX;
+  }
+  if(abs(pvpOnline.corrY||0)>0.02){
+    var stepY=(pvpOnline.corrY||0)*0.22;
+    P.y += stepY;
+    pvpOnline.corrY -= stepY;
+  }
+}
+
 function onOnlinePacket(d){
   if(!d) return;
   if(d.sid&&pvpOnline.sid&&d.sid===pvpOnline.sid) return;
@@ -960,6 +977,15 @@ function onOnlinePacket(d){
     var sy=d.y + vy*lagFrames;
     bullets.push({x:sx,y:sy,vx:vx,vy:vy,dmg:d.dmg||18,life:max(18,min(90,d.life||38)),col:d.col||'#8df0ff',sz:max(2,min(6,d.sz||3)),fri:!remoteEnemy,kb:d.kb||1,ownerSid:d.sid||'',onlinePvP:remoteEnemy,shotSeq:d.shotSeq||0});
     pvpOnline.lastRx=performance.now();
+    return;
+  }
+  if(d.type==='state_ack'&&d.seq){
+    if(d.seq>= (pvpOnline.lastAckSeq||0)){
+      pvpOnline.lastAckSeq=d.seq;
+      var dx=(Number(d.x||P.x)-P.x), dy=(Number(d.y||P.y)-P.y);
+      if(abs(dx)>0.35) pvpOnline.corrX=(pvpOnline.corrX||0)+dx;
+      if(abs(dy)>0.35) pvpOnline.corrY=(pvpOnline.corrY||0)+dy;
+    }
     return;
   }
   if(d.type==='chat'&&(selMode==='pvp_online'||selMode==='coop_online')){ addChatLine((d.nick||'Rival')+': '+String(d.text||''), d.sid===pvpOnline.sid); return; }
@@ -1064,9 +1090,24 @@ function buildOnlineSel(force){
 function sendOnlineState(extra){
   if(!pvpOnline.on) return;
   var payload=Object.assign({type:'state',sid:pvpOnline.sid,nick:pvpOnline.nick,x:P.x,y:P.y,hp:P.hp,ts:Date.now()},extra||{});
+  if(payload.type==='hit' && !payload.shotTs) payload.shotTs=Date.now();
+  if(payload.type==='hit' && !payload.maxDist) payload.maxDist=90;
+  if(payload.type==='state'){
+    var prev=pvpOnline.lastSentState||{};
+    var delta={type:'state'};
+    var changed=0;
+    for(var k in payload){
+      if(k==='type'||k==='sid'||k==='nick') continue;
+      if(prev[k]!==payload[k]){ delta[k]=payload[k]; changed++; }
+    }
+    if(!changed) return;
+    pvpOnline.lastSentState=Object.assign({}, prev, delta);
+    payload=delta;
+  }
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
     fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})})
-      .then(function(r){if(!r.ok&&r.status===404){pvpOnline.connected=false;}})
+      .then(function(r){if(!r.ok&&r.status===404){pvpOnline.connected=false;} return r.ok?r.json():null;})
+      .then(function(j){ if(j&&j.ack) onOnlinePacket(j.ack); })
       .catch(function(){});
     return;
   }
@@ -2347,6 +2388,7 @@ function update(){
   if(canControl&&(keys.shift||keys.k)&&P.dashCD<=0&&P.sta>=25){P.vx+=P.facing*14;P.dashCD=70;P.sta-=25;emitP(P.x,P.y,8,'#66e0ff',3,12,2);}
   if(pvpOnline.on&&frameN%8===0){pvpOnline.stateSeq=(pvpOnline.stateSeq||0)+1;sendOnlineState({type:'state',seq:pvpOnline.stateSeq,x:round(P.x*10)/10,y:round(P.y*10)/10,vx:round(P.vx*10)/10,hp:round(P.hp),dead:P.hp<=0,score:pvpMatch.my,grounded:P.grounded,anim:round(P.anim*100)/100,facing:P.facing,vy:round(P.vy*10)/10,aimX:round(mWorld.x),aimY:round(mWorld.y),wi:P.wi}); if(frameN%16===0) pollRelay(); if(frameN%120===0) sendPingSample(); var om=document.getElementById('onlineMeta'); if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}}
   if((selMode==='pvp_online'||selMode==='coop_online')&&pvpOnline.on) applyRemoteSmoothing();
+  if(selMode==='pvp_online'&&pvpOnline.on) applyLocalCorrections();
   if(selMode==='pvp_online'&&pvpMatch.live&&pvpOnline.enemySid){
     var silence=performance.now()-pvpOnline.lastRx;
     if(silence>12000){
@@ -2381,7 +2423,7 @@ function update(){
       p2.vy+=GRAV; p2.vx*=.9; p2.x=clamp((p2.x||P.x+120)+p2.vx,30,W-30); p2.y=(p2.y||P.y)+p2.vy; if(p2.y>P.y) {p2.y=P.y; p2.vy=0;}
       if(mDown&&dst(P.x,P.y,p2.x,p2.y)<42){p2.hp-=2; if(p2.hp<=0){announce('P1 WINS PVP'); endGame('VICTORY'); return;}}
     }
-    if(selMode==='pvp_online'&&mDown&&frameN%12===0&&pvpMatch.live&&pvpOnline.enemySid){var d12=dst(P.x,P.y,pvpState.p2.x,pvpState.p2.y); if(d12<62){sendOnlineState({type:'hit',dmg:8,targetId:pvpOnline.enemySid});}}
+    if(selMode==='pvp_online'&&mDown&&frameN%12===0&&pvpMatch.live&&pvpOnline.enemySid){var d12=dst(P.x,P.y,pvpState.p2.x,pvpState.p2.y); if(d12<62){sendOnlineState({type:'hit',dmg:8,targetId:pvpOnline.enemySid,shotTs:Date.now(),maxDist:75});}}
   }
 
   var spdMul=(overdriveT>0?1.22:1)*runBuffs.spd*(eventState.toxic?0.72:1)*prog.permSpd;
