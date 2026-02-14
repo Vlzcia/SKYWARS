@@ -26,7 +26,7 @@ function saveDb(){
 
 function sendJson(res, code, obj){
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control':'no-store' });
   res.end(body);
 }
 function getRoom(room){
@@ -36,8 +36,21 @@ function getRoom(room){
 function collectBody(req){
   return new Promise((resolve,reject)=>{
     let b='';
-    req.on('data',c=>{ b+=c; if(b.length>1e6) req.destroy(); });
-    req.on('end',()=>resolve(b));
+    let tooLarge = false;
+    req.on('data',c=>{
+      if (tooLarge) return;
+      b += c;
+      if (b.length > 1e6) tooLarge = true;
+    });
+    req.on('end',()=>{
+      if (tooLarge) {
+        const err = new Error('payload_too_large');
+        err.code = 413;
+        reject(err);
+        return;
+      }
+      resolve(b);
+    });
     req.on('error',reject);
   });
 }
@@ -62,8 +75,9 @@ const server = http.createServer(async (req, res) => {
       db.rooms[room].joins += 1; db.rooms[room].updatedAt = Date.now();
       saveDb();
       sendJson(res, 200, { ok: true, sid, room, nick, players:r.size });
-    }catch{
-      sendJson(res, 400, { ok: false });
+    }catch(err){
+      const code = err && err.code === 413 ? 413 : 400;
+      sendJson(res, code, { ok: false, error: code===413 ? 'payload_too_large' : 'bad_request' });
     }
     return;
   }
@@ -94,8 +108,9 @@ const server = http.createServer(async (req, res) => {
         if (id !== sid) client.queue.push(pkt);
       }
       sendJson(res, 200, { ok: true });
-    }catch{
-      sendJson(res, 400, { ok: false });
+    }catch(err){
+      const code = err && err.code === 413 ? 413 : 400;
+      sendJson(res, code, { ok: false, error: code===413 ? 'payload_too_large' : 'bad_request' });
     }
     return;
   }
@@ -112,6 +127,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+
+  if (u.pathname === '/online/health' && req.method === 'GET') {
+    sendJson(res, 200, { ok:true, status:'up', uptime:Math.floor(process.uptime()) });
+    return;
+  }
+
   if (u.pathname === '/online/status' && req.method === 'GET') {
     const room = sanitizeRoom(u.searchParams.get('room') || '');
     const r = rooms.get(room);
@@ -121,10 +142,11 @@ const server = http.createServer(async (req, res) => {
 
   // static
   let pathname = decodeURIComponent(u.pathname);
-  if (pathname === '/') pathname = '/public/index.html';
+  if (pathname === '/') pathname = '/index.html';
   const rel = pathname.replace(/^\/+/, '');
-  const file = path.join(ROOT, rel);
-  if (!file.startsWith(ROOT)) { res.writeHead(403); res.end('Forbidden'); return; }
+  const file = path.resolve(ROOT, rel);
+  const rootPrefix = ROOT.endsWith(path.sep) ? ROOT : ROOT + path.sep;
+  if (file !== ROOT && !file.startsWith(rootPrefix)) { res.writeHead(403); res.end('Forbidden'); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end('Not Found'); return; }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
