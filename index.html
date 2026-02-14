@@ -371,6 +371,7 @@ function rndI(a,b){return floor(rnd(a,b+1));}
 function dst(x1,y1,x2,y2){return hypot(x2-x1,y2-y1);}
 function ang(x1,y1,x2,y2){return Math.atan2(y2-y1,x2-x1);}
 function pct(v){return Math.random()<v;}
+function rchance(v){return pct(v);}
 function pick(a){return a[floor(Math.random()*a.length)];}
 
 /* ---- CONSTANTS ---- */
