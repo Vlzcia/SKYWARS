@@ -261,7 +261,7 @@ canvas#game{display:block;width:100%;height:100%;position:fixed;top:0;left:0}
   <div class="tiny-meta" id="onlineMeta">Online PvP: offline</div>
   <div class="online-panel" id="onlinePanel">
     <input id="nickInput" class="online-in" maxlength="14" placeholder="Usuario" value="Player">
-    <input id="roomInput" class="online-in" maxlength="20" placeholder="Código sala" value="room1">
+    <input id="roomInput" class="online-in" maxlength="32" placeholder="Código sala" value="room1">
     <button id="connectBtn">Conectar</button>
   </div>
   <div class="tiny-meta" id="dailyMeta">Daily: -</div>
@@ -420,7 +420,7 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival'}};
-var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:''};
+var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:''};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0};
 var storyState={chapter:1,goalWave:6,done:false,kills:0};
 var account={globalXP:0,prestige:0,playSec:0,lastSeen:0,streak:0,mmr:1000,winStreak:0,returnBonus:0,lore:[]};
@@ -749,15 +749,49 @@ function onOnlinePacket(d){
   if(d.type==='round_win'&&selMode==='pvp_online'){ resolveOnlineRound(d.winnerSid,d.round); return;}
   if(d.type==='kill'){announce('⚔ '+(d.nick||'Rival')+' te derrotó'); if(selMode!=='coop_online'&&selMode!=='pvp_online') endGame('DEFEAT ONLINE');}
 }
+function sanitizeOnlineRoom(v){
+  return String(v||'room1').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,32) || 'room1';
+}
+function sanitizeOnlineNick(v){
+  return String(v||'Player').replace(/[^\w\- ]/g,'').slice(0,14) || 'Player';
+}
+function setConnectBtnBusy(isBusy){
+  var cb=document.getElementById('connectBtn');
+  if(!cb) return;
+  cb.disabled=!!isBusy;
+  cb.style.opacity=isBusy?'.65':'1';
+  cb.textContent=isBusy?'Conectando...':'Conectar';
+}
+function parseMaybeJsonResponse(r){
+  return r.text().then(function(t){
+    if(!t) return {};
+    try{return JSON.parse(t);}catch(e){return {ok:false,error:'invalid_json'};}
+  });
+}
 function connectRelay(room,nick,onFail){
   var m=document.getElementById('onlineMeta');
+  pvpOnline.connecting=true;
+  setConnectBtnBusy(true);
   fetch('/online/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:room,nick:nick})})
-  .then(function(r){return r.json().then(function(j){ if(!r.ok) throw j||{}; return j;});})
+  .then(function(r){
+    return parseMaybeJsonResponse(r).then(function(j){
+      if(!r.ok) throw (j||{});
+      return j;
+    });
+  })
   .then(function(j){
+    pvpOnline.connecting=false;
+    setConnectBtnBusy(false);
     if(!j||!j.sid){onFail();return;}
-    pvpOnline.sid=j.sid; pvpOnline.transport='relay'; pvpOnline.connected=true;
+    pvpOnline.sid=j.sid; pvpOnline.transport='relay'; pvpOnline.connected=true; pvpOnline.lastErr='';
     if(m) m.textContent='Online 1v1 conectado · sala '+room+' como '+nick+' (esperando rival)';
-  }).catch(function(err){ if(err&&err.error==='room_full'){if(m)m.textContent='Sala llena (1v1: 2/2). Usa otro código'; return;} onFail();});
+  }).catch(function(err){
+    pvpOnline.connecting=false;
+    setConnectBtnBusy(false);
+    pvpOnline.lastErr=(err&&err.error)||'connect_error';
+    if(err&&err.error==='room_full'){if(m)m.textContent='Sala llena (1v1: 2/2). Usa otro código'; return;}
+    onFail();
+  });
 }
 function connectBroadcast(room,nick){
   var m=document.getElementById('onlineMeta');
@@ -770,7 +804,16 @@ function pollRelay(){
   if(pvpOnline.transport!=='relay'||!pvpOnline.sid||pvpOnline.relayBusy) return;
   pvpOnline.relayBusy=true;
   fetch('/online/poll?room='+encodeURIComponent(pvpOnline.room)+'&sid='+encodeURIComponent(pvpOnline.sid))
-    .then(function(r){return r.ok?r.json():{events:[]};})
+    .then(function(r){
+      if(r.status===404){
+        pvpOnline.connected=false;
+        pvpOnline.lastErr='session_lost';
+        var om=document.getElementById('onlineMeta');
+        if(om) om.textContent='Conexión perdida. Presiona Conectar otra vez.';
+        return {events:[]};
+      }
+      return r.ok?r.json():{events:[]};
+    })
     .then(function(j){(j.events||[]).forEach(onOnlinePacket);})
     .catch(function(){})
     .finally(function(){pvpOnline.relayBusy=false;});
@@ -779,9 +822,10 @@ function buildOnlineSel(force){
   var m=document.getElementById('onlineMeta'); if(!m) return;
   var roomEl=document.getElementById('roomInput');
   var nickEl=document.getElementById('nickInput');
-  var room=((roomEl&&roomEl.value)||'').trim();
-  var nick=((nickEl&&nickEl.value)||'Player').trim().slice(0,14);
-  if(!nick) nick='Player';
+  var room=sanitizeOnlineRoom((roomEl&&roomEl.value)||'');
+  var nick=sanitizeOnlineNick((nickEl&&nickEl.value)||'Player');
+  if(roomEl) roomEl.value=room;
+  if(nickEl) nickEl.value=nick;
   pvpOnline.nick=nick;
   if(selMode!=='pvp_online'&&selMode!=='coop_online'){m.textContent='Online PvP: offline';return;}
   if(!room){m.textContent='Online PvP: escribe código de sala';return;}
@@ -795,7 +839,9 @@ function sendOnlineState(extra){
   if(!pvpOnline.on) return;
   var payload=Object.assign({type:'state',sid:pvpOnline.sid,nick:pvpOnline.nick,x:P.x,y:P.y,hp:P.hp,ts:Date.now()},extra||{});
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
-    fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})}).catch(function(){});
+    fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})})
+      .then(function(r){if(!r.ok&&r.status===404){pvpOnline.connected=false;}})
+      .catch(function(){});
     return;
   }
   if(pvpOnline.transport==='bc'&&pvpOnline.chan){pvpOnline.chan.postMessage(payload);}
