@@ -421,7 +421,8 @@ var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
 var pvpOnline={on:false,room:'',nick:'P'+(Math.random()*999|0),chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:110,snapMax:40};
-var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0};
+var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0};
+var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var storyState={chapter:1,goalWave:6,done:false,kills:0};
 var account={globalXP:0,prestige:0,playSec:0,lastSeen:0,streak:0,mmr:1000,winStreak:0,returnBonus:0,lore:[]};
 var personalChallenge={text:'',target:0,progress:0,reward:0,done:false};
@@ -510,6 +511,7 @@ function loadMeta(){
   try{var st=localStorage.getItem('skywars_story');if(st)story=Object.assign(story,JSON.parse(st));}catch(e){}
   try{var bs=localStorage.getItem('skywars_base');if(bs)base=Object.assign(base,JSON.parse(bs));}catch(e){}
   try{var ac=localStorage.getItem('skywars_account');if(ac)account=Object.assign(account,JSON.parse(ac));}catch(e){}
+  try{var ph=localStorage.getItem('skywars_pvp_history');if(ph)pvpStats.history=JSON.parse(ph);}catch(e){}
 }
 
 
@@ -528,6 +530,7 @@ function saveMeta(){
   localStorage.setItem('skywars_story',JSON.stringify(story));
   localStorage.setItem('skywars_base',JSON.stringify(base));
   localStorage.setItem('skywars_account',JSON.stringify(account));
+  localStorage.setItem('skywars_pvp_history',JSON.stringify((pvpStats.history||[]).slice(-20)));
 }
 
 
@@ -539,7 +542,7 @@ function renderMeta(){
   var bm=document.getElementById('badgeMeta'); if(bm) bm.textContent='Badges: '+(prog.badges.length?prog.badges.join(', '):'none')+' · Top '+globalRank.length;
   var dm=document.getElementById('dailyMeta'); if(dm) dm.textContent='Daily: '+daily.challenge+' '+daily.progress+'/'+daily.goal+' · Streak '+daily.streak+'d · Map '+mapSet;
   var sm=document.getElementById('storyMeta'); if(sm) sm.textContent='Story: Chapter '+story.chapter+' · Goal Wave '+storyState.goalWave;
-  var om=document.getElementById('onlineMeta'); if(om&&selMode==='pvp_online'){om.textContent='PVP ONLINE 1v1 · Ronda '+pvpMatch.round+'/'+pvpMatch.maxRounds+' · '+pvpMatch.my+'-'+pvpMatch.enemy+' · Sala '+(pvpOnline.room||'-');}
+  var om=document.getElementById('onlineMeta'); if(om&&selMode==='pvp_online'){om.textContent='PVP ONLINE 1v1 · Ronda '+pvpMatch.round+'/'+pvpMatch.maxRounds+' · '+pvpMatch.my+'-'+pvpMatch.enemy+' · '+ceil(max(0,pvpMatch.timeLeft||0))+'s · Sala '+(pvpOnline.room||'-');}
 }
 function addXP(v){
   runXP+=v;
@@ -691,18 +694,24 @@ function buildAvatarSel(){
 
 
 function resetPvpOnlineMatch(){
-  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0};
+  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0};
   pvpOnline.enemySid='';
   pvpOnline.snapshots=[];
+  pvpStats.shots=0; pvpStats.hits=0; pvpStats.kills=0; pvpStats.deaths=0; pvpStats.hitFx=0;
 }
 function startOnlineRound(){
   genWorld();
   bullets=[]; particles=[]; explosions=[]; grenades=[];
   var center=platforms.find(function(p){return p.isCenter;})||platforms[0];
-  P.hp=P.mhp; P.sh=0; P.invuln=30; P.x=center.cx-90; P.y=center.y-2; P.vx=0; P.vy=0;
-  pvpState.p2.x=center.cx+90; pvpState.p2.y=center.y-2; pvpState.p2.hp=pvpState.p2.mhp||120;
-  pvpMatch.live=true;
+  pvpMatch.spawnFlip=!pvpMatch.spawnFlip;
+  var off=pvpMatch.spawnFlip?90:-90;
+  P.hp=P.mhp; P.sh=0; P.invuln=120; P.x=center.cx-off; P.y=center.y-2; P.vx=0; P.vy=0;
+  pvpState.p2.x=center.cx+off; pvpState.p2.y=center.y-2; pvpState.p2.hp=pvpState.p2.mhp||120;
+  pvpMatch.timeLeft=pvpMatch.timeMax;
+  pvpMatch.live=false;
+  pvpMatch.respawnT=180;
   announce('⚔ ROUND '+pvpMatch.round+' / '+pvpMatch.maxRounds+' · reset mapa');
+  sfx(300,.08,'sawtooth',.08,1.7);
 }
 function resolveOnlineRound(winnerSid,roundNum){
   if(selMode!=='pvp_online') return;
@@ -710,7 +719,9 @@ function resolveOnlineRound(winnerSid,roundNum){
   if(rn<=pvpMatch.lastResolved) return;
   pvpMatch.lastResolved=rn;
   pvpMatch.live=false;
-  if(winnerSid===pvpOnline.sid) pvpMatch.my++; else pvpMatch.enemy++;
+  if(String(winnerSid||'').indexOf('draw_')===0){ sfx(340,.08,'triangle',.06,1.1); }
+  else if(winnerSid===pvpOnline.sid){ pvpMatch.my++; pvpStats.kills++; sfx(780,.12,'triangle',.08,.6);}
+  else { pvpMatch.enemy++; pvpStats.deaths++; sfx(160,.14,'sawtooth',.08,.5); }
   var need=3;
   if(pvpMatch.my>=need||pvpMatch.enemy>=need||pvpMatch.round>=pvpMatch.maxRounds){
     endGame(pvpMatch.my>pvpMatch.enemy?'VICTORY ONLINE':'DEFEAT ONLINE');
@@ -792,6 +803,42 @@ function applyRemoteSmoothing(){
   p2.name=last.nick;
 }
 
+function pvpAddHitFeedback(dmg){
+  pvpStats.hitFx=12;
+  pvpStats.lastHitDmg=round(dmg||0);
+  pvpStats.hits=(pvpStats.hits||0)+1;
+  sfx(920,.05,'square',.06,.8);
+}
+
+function drawPvpOverlay(){
+  if(selMode!=='pvp_online') return;
+  var bx=W*0.5-170, by=12, bw=140, bh=10;
+  var myHp=clamp(P.hp/max(1,P.mhp),0,1), enHp=clamp((pvpState.p2.hp||0)/max(1,pvpState.p2.mhp||120),0,1);
+  X.fillStyle='rgba(0,0,0,.45)';
+  X.fillRect(bx,by,bw,bh); X.fillRect(bx+200,by,bw,bh);
+  X.fillStyle='#4fe3ff'; X.fillRect(bx,by,bw*myHp,bh);
+  X.fillStyle='#ff5a9d'; X.fillRect(bx+200,by,bw*enHp,bh);
+  X.fillStyle='rgba(255,255,255,.9)'; X.font='700 12px Orbitron'; X.textAlign='center';
+  X.fillText((pvpOnline.nick||'YOU')+' '+round(P.hp),bx+bw/2,by+24);
+  X.fillText((pvpState.p2.name||'RIVAL')+' '+round(pvpState.p2.hp||0),bx+200+bw/2,by+24);
+  X.fillStyle='#ffd530'; X.font='900 18px Orbitron';
+  X.fillText(pvpMatch.my+' - '+pvpMatch.enemy,W/2,by+20);
+  X.fillStyle='rgba(255,255,255,.82)'; X.font='700 12px Orbitron';
+  var tt=max(0,pvpMatch.timeLeft||0);
+  X.fillText('R'+pvpMatch.round+' · '+ceil(tt)+'s',W/2,by+36);
+  if(pvpMatch.respawnT>0){
+    X.fillStyle='#ffffff'; X.font='900 34px Orbitron';
+    var c=max(1,ceil(pvpMatch.respawnT/60));
+    X.fillText(c>1?String(c):'FIGHT!',W/2,H*0.42);
+  }
+  if(pvpStats.hitFx>0){
+    pvpStats.hitFx--;
+    X.fillStyle='rgba(255,255,255,'+(0.35+pvpStats.hitFx/20)+')'; X.font='900 28px Orbitron';
+    X.fillText('✹ '+(pvpStats.lastHitDmg||0),W/2,H/2-40);
+  }
+}
+
+
 function onOnlinePacket(d){
   if(!d) return;
   if(d.sid&&pvpOnline.sid&&d.sid===pvpOnline.sid) return;
@@ -806,7 +853,9 @@ function onOnlinePacket(d){
     if(!pvpMatch.live) return;
     if(d.targetId&&d.targetId!==pvpOnline.sid) return;
     P.hp=max(0,P.hp-(d.dmg||12));
-    if(P.hp<=0){ sendOnlineState({type:'round_win',winnerSid:d.sid,round:pvpMatch.round}); resolveOnlineRound(d.sid,pvpMatch.round); }
+    shake=max(shake,4); hitFlash=max(hitFlash,.7);
+    sendOnlineState({type:'hit_confirm',toSid:d.sid,dmg:d.dmg||12});
+    if(P.hp<=0){ emitP(P.x,P.y-P.h/2,18,'#ff3355',3,18,3); sendOnlineState({type:'round_win',winnerSid:d.sid,round:pvpMatch.round}); resolveOnlineRound(d.sid,pvpMatch.round); }
     return;
   }
   if(d.type==='shot'&&(selMode==='coop_online'||selMode==='pvp_online')){
@@ -822,6 +871,7 @@ function onOnlinePacket(d){
     pvpOnline.lastRx=performance.now();
     return;
   }
+  if(d.type==='hit_confirm'&&selMode==='pvp_online'){ pvpAddHitFeedback(d.dmg||0); return; }
   if(d.type==='round_win'&&selMode==='pvp_online'){ resolveOnlineRound(d.winnerSid,d.round); return;}
   if(d.type==='kill'){announce('⚔ '+(d.nick||'Rival')+' te derrotó'); if(selMode!=='coop_online'&&selMode!=='pvp_online') endGame('DEFEAT ONLINE');}
 }
@@ -1376,6 +1426,7 @@ function shoot(){
     bullets.push({x:P.x+P.facing*12,y:P.y-P.h/2,vx:cos(a)*w.spd,vy:sin(a)*w.spd,
       dmg:dmg,life:ceil(w.range/w.spd),col:(cosmetics.bulletFx==='arc'||w.rarity==='mythic'?'#66e0ff':w.col),sz:w.sz+(cosmetics.bulletFx==='arc'||w.rarity==='legendary'||w.rarity==='mythic'?1:0),fri:true,expl:w.expl,kb:w.kb,rarity:w.rarity});
   }
+  if(selMode==='pvp_online') pvpStats.shots=(pvpStats.shots||0)+w.bul;
   if(pvpOnline.on&&(selMode==='coop_online'||selMode==='pvp_online')){
     pvpState.p2.shotSeq=(pvpState.p2.shotSeq||0)+1;
     sendOnlineState({type:'shot',x:P.x+P.facing*12,y:P.y-P.h/2,tx:mWorld.x,ty:mWorld.y,spd:w.spd,life:ceil(w.range/w.spd),dmg:round(w.dmg*(selMode==='pvp_online'?0.72:0.65)),col:w.col,sz:w.sz,kb:w.kb,shotSeq:pvpState.p2.shotSeq});
@@ -2188,13 +2239,31 @@ function update(){
   if(P.focus&&P.focusT>0)P.focusT--;
 
   // ---- Player Movement ----
+  var canControl=!(selMode==='pvp_online'&&(!pvpMatch.live||P.hp<=0));
   var mx=0;
-  if(keys.a||keys.arrowleft) mx-=1;
-  if(keys.d||keys.arrowright) mx+=1;
-  if(joyAct) mx+=jDX;
-  if((keys.shift||keys.k)&&P.dashCD<=0&&P.sta>=25){P.vx+=P.facing*14;P.dashCD=70;P.sta-=25;emitP(P.x,P.y,8,'#66e0ff',3,12,2);}
+  if(canControl&& (keys.a||keys.arrowleft)) mx-=1;
+  if(canControl&& (keys.d||keys.arrowright)) mx+=1;
+  if(canControl&& joyAct) mx+=jDX;
+  if(canControl&&(keys.shift||keys.k)&&P.dashCD<=0&&P.sta>=25){P.vx+=P.facing*14;P.dashCD=70;P.sta-=25;emitP(P.x,P.y,8,'#66e0ff',3,12,2);}
   if(pvpOnline.on&&frameN%5===0){sendOnlineState({type:'state',x:P.x,y:P.y,hp:P.hp,dead:P.hp<=0,score:pvpMatch.my,grounded:P.grounded,anim:P.anim,facing:P.facing,vy:P.vy,aimX:mWorld.x,aimY:mWorld.y,wi:P.wi}); if(frameN%15===0) pollRelay(); var om=document.getElementById('onlineMeta'); if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}}
   if((selMode==='pvp_online'||selMode==='coop_online')&&pvpOnline.on) applyRemoteSmoothing();
+  if(selMode==='pvp_online'){
+    if(pvpMatch.respawnT>0){
+      pvpMatch.respawnT--;
+      if(pvpMatch.respawnT===60) sfx(520,.05,'triangle',.07,.9);
+      if(pvpMatch.respawnT===30) sfx(620,.05,'triangle',.07,.9);
+      if(pvpMatch.respawnT===1){pvpMatch.live=true;announce('FIGHT!');sfx(760,.09,'square',.08,.8);}
+    }
+    if(pvpMatch.live){
+      pvpMatch.timeLeft=max(0,pvpMatch.timeLeft-1/60);
+      if(P.invuln>0) P.invuln--;
+      if(pvpMatch.timeLeft<=0){
+        var winner = P.hp===pvpState.p2.hp ? '' : (P.hp>pvpState.p2.hp ? pvpOnline.sid : pvpOnline.enemySid);
+        if(!winner){announce('EMPATE'); resolveOnlineRound('draw_'+pvpMatch.round,pvpMatch.round);}
+        else {sendOnlineState({type:'round_win',winnerSid:winner,round:pvpMatch.round}); resolveOnlineRound(winner,pvpMatch.round);}
+      }
+    }
+  }
   if(pvpState.on){
     var p2=pvpState.p2;
     if(selMode==='pvp'){
@@ -2250,7 +2319,7 @@ function update(){
   P.sta=min(P.msta,P.sta+(P.grounded?0.35:0.18));
 
   // Shooting
-  if(mDown||mobFire){
+  if(canControl&&(mDown||mobFire)){
     if(mobFire&&!mDown){
       var tgt=autoAim();
       if(tgt){mWorld.x=tgt.x;mWorld.y=tgt.y-tgt.h/2;P.facing=tgt.x>P.x?1:-1;}
@@ -2277,9 +2346,10 @@ function update(){
     } else {
       if(selMode==='pvp_online'&&b.onlinePvP&&b.ownerSid&&b.ownerSid!==pvpOnline.sid&&pvpMatch.live&&dst(b.x,b.y,P.x,P.y-P.h/2)<16){
         P.hp=max(0,P.hp-(b.dmg||12));
-        hitFlash=max(hitFlash,.8);
+        hitFlash=max(hitFlash,.8); shake=max(shake,4);
         emitP(b.x,b.y,6,'#ff5577',2,10,2);
-        if(P.hp<=0){sendOnlineState({type:'round_win',winnerSid:b.ownerSid,round:pvpMatch.round});resolveOnlineRound(b.ownerSid,pvpMatch.round);}
+        sendOnlineState({type:'hit_confirm',toSid:b.ownerSid,dmg:b.dmg||12});
+        if(P.hp<=0){emitP(P.x,P.y-P.h/2,18,'#ff3355',3,18,3);sendOnlineState({type:'round_win',winnerSid:b.ownerSid,round:pvpMatch.round});resolveOnlineRound(b.ownerSid,pvpMatch.round);}
         return false;
       }
       if(b.x>P.x-P.w/2&&b.x<P.x+P.w/2&&b.y>P.y-P.h&&b.y<P.y){
@@ -2469,6 +2539,7 @@ function draw(t){
   if(ghost.active){var gx=ghost.x-cam.x+W/2,gy=ghost.y-cam.y+H/2;X.globalAlpha=.45;X.fillStyle='#b6f2ff';X.beginPath();X.arc(gx,gy-14,10,0,TAU);X.fill();X.globalAlpha=1;}
   for(di=0;di<enemies.length;di++) drawEnemyFn(enemies[di],t);
   drawPlayer(t);drawBullets();drawParticles();drawExplosions();
+  drawPvpOverlay();
   drawVignette();drawVoidFog();
   if(hitFlash>0){
     X.globalAlpha=hitFlash*.16;X.fillStyle='#ff3040';X.fillRect(0,0,W,H);X.globalAlpha=1;
@@ -2562,11 +2633,17 @@ function endGame(reason){
   renderMeta();
 
   var go=document.getElementById('scrGO');go.classList.remove('off');
+  var remBtn=document.getElementById('btnRematch'); if(remBtn) remBtn.style.display=(selMode==='pvp_online'?'inline-block':'none');
   var gt=document.getElementById('goTitle'); if(gt){
     if(selMode==='pvp_online') gt.textContent=(/VICTORY/.test(lastEndReason)?'GANADOR FINAL: '+(pvpOnline.nick||'PLAYER'):'GANADOR FINAL: '+(pvpState.p2.name||'RIVAL'));
     else gt.textContent=(/VICTORY/.test(lastEndReason)?'MISSION COMPLETE':lastEndReason==='TIME UP'?'TIME UP':'MISSION FAILED');
   }
-  document.getElementById('goMeta').innerHTML='Session Best <b>'+bestScore.toLocaleString()+'</b>';
+  var acc=pvpStats.shots>0?round((pvpStats.hits/pvpStats.shots)*100):0;
+  if(selMode==='pvp_online'){
+    pvpStats.history.push({ts:Date.now(),room:pvpOnline.room||'-',my:pvpMatch.my,enemy:pvpMatch.enemy,k:pvpStats.kills,d:pvpStats.deaths,acc:acc});
+    pvpStats.history=pvpStats.history.slice(-20);
+  }
+  document.getElementById('goMeta').innerHTML='Session Best <b>'+bestScore.toLocaleString()+'</b>'+(selMode==='pvp_online'?' · K '+pvpStats.kills+' / D '+pvpStats.deaths+' · ACC '+acc+'%':'');
   document.getElementById('goGrid').innerHTML=
     '<div class="go-s"><div class="go-v">'+score.toLocaleString()+'</div><div class="go-l">Score</div></div>'+
     '<div class="go-s"><div class="go-v">'+kills+'</div><div class="go-l">Kills</div></div>'+
@@ -2623,6 +2700,9 @@ document.getElementById('btnRetry').addEventListener('click',function(){
   document.getElementById('scrGO').classList.add('off');
   initGame();
 });
+var remBtn=document.getElementById('btnRematch');
+if(!remBtn){ remBtn=document.createElement('button'); remBtn.id='btnRematch'; remBtn.className='btn-go'; remBtn.style.marginTop='8px'; remBtn.style.display='none'; remBtn.textContent='REVANCHA'; var go=document.getElementById('scrGO'); if(go) go.appendChild(remBtn);}
+remBtn.addEventListener('click',function(){ if(selMode!=='pvp_online') return; document.getElementById('scrGO').classList.add('off'); resetPvpOnlineMatch(); initGame();});
 var sc=document.getElementById('shopContinue');if(sc)sc.addEventListener('click',function(){document.getElementById('shop').classList.remove('on');state='playing';shopPending=false;spawnWaveNow();});
 var cb=document.getElementById('connectBtn'); if(cb) cb.addEventListener('click',function(){buildOnlineSel(true);});
 var tc=document.getElementById('toggleControls'); if(tc) tc.addEventListener('click',function(){var box=document.getElementById('controlsBox'); if(!box) return; box.classList.toggle('on'); tc.textContent=box.classList.contains('on')?'Ocultar controles':'Ver controles'; if(box.classList.contains('on')) box.scrollIntoView({behavior:'smooth',block:'nearest'});});
