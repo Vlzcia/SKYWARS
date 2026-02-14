@@ -1006,6 +1006,7 @@ function onOnlinePacket(d){
   if(!d) return;
   if(d.sid&&pvpOnline.sid&&d.sid===pvpOnline.sid) return;
   if(d.type==='state'){
+    if(d.seq&&pvpOnline.lastRemoteSeq&&d.seq<pvpOnline.lastRemoteSeq) return;
     pushRemoteSnapshot(d);
     if(d.sid) pvpOnline.enemySid=d.sid;
     pvpOnline.lastRx=performance.now(); pvpOnline.connected=true;
@@ -1176,7 +1177,7 @@ function sendOnlineState(extra){
 
 function rollCardsAndCurse(){
   deckCards=[pick(['Rapid Fire','Vampiric Rounds','Shock Ammo']),pick(['Combo Engine','Thick Armor','Lucky Drop'])];
-  curse={name:pick(['Fragile Hull','Vampiric Enemies','Dark Fog']),active:pct(.45),mult:1.35};
+  curse={name:pick(['Fragile Hull','Vampiric Enemies','Dark Fog']),active:rchance(.45),mult:1.35};
   if(curse.active) announce('☠ CURSE: '+curse.name+' (x'+curse.mult.toFixed(2)+' rewards)');
 }
 function updateContracts(){
@@ -1219,29 +1220,54 @@ const nebs = Array.from({length:7},function(){return {
    ══════════════════════════════════════════ */
 var platforms = [];
 var bridges = [];
+var WORLD_W = 0, WORLD_H = 0;
+
+
+function makeSeededRng(seedStr){
+  var h=2166136261>>>0;
+  seedStr=String(seedStr||'skywars');
+  for(var i=0;i<seedStr.length;i++){ h^=seedStr.charCodeAt(i); h=Math.imul(h,16777619); }
+  return function(){
+    h += 0x6D2B79F5;
+    var t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function getOnlineSeed(){
+  return String(pvpOnline.room||'room')+'|r'+String((pvpMatch&&pvpMatch.round)||1);
+}
 
 function genWorld(){
   platforms=[]; bridges=[]; portals=[]; traps=[];
-  var gy = H*0.72;
-  var n = max(5, min(9, round(W/180)));
-  var sp = W/(n+1);
+  var onlineSync=(selMode==='pvp_online'||selMode==='coop_online');
+  WORLD_W = onlineSync ? 1600 : W;
+  WORLD_H = onlineSync ? 900 : H;
+  var rand = onlineSync ? makeSeededRng(getOnlineSeed()) : Math.random;
+  function rr(a,b){ return a + (b-a)*rand(); }
+  function rri(a,b){ return floor(rr(a,b+1)); }
+  function rp(arr){ return arr[(rand()*arr.length)|0]; }
+  function rchance(p){ return rand()<p; }
+  var gy = WORLD_H*0.72;
+  var n = onlineSync ? 9 : max(5, min(9, round(WORLD_W/180)));
+  var sp = WORLD_W/(n+1);
   var ci = floor(n/2);
 
   for(var i=0;i<n;i++){
     var ic = i===ci;
-    var pw = ic ? rnd(220,280) : rnd(110,190);
-    var ph = rnd(20,35);
-    var px = sp*(i+1) + rnd(-25,25);
-    var py = gy + rnd(-50,50);
-    var layers = rndI(2,4);
-    var hue = ic?210:pick([0,25,120,200,280,340]);
+    var pw = ic ? rr(220,280) : rr(110,190);
+    var ph = rr(20,35);
+    var px = sp*(i+1) + rr(-25,25);
+    var py = gy + rr(-50,50);
+    var layers = rri(2,4);
+    var hue = ic?210:rp([0,25,120,200,280,340]);
     platforms.push({
       x:px-pw/2, y:py, w:pw, h:ph, cx:px, cy:py,
       layers:layers, hue:hue, isCenter:ic,
-      hasChest:!ic&&pct(.35), chestOpened:false, chestType:pick(['ammo','health','shield','weapon']),
-      veg: Array.from({length:rndI(1,4)},function(){return {
-        off:rnd(.1,.9), type:pick(['tree','crystal','mushroom','flower']),
-        sz:rnd(.7,1.3), hue:rndI(80,300)
+      hasChest:!ic&&rchance(.35), chestOpened:false, chestType:rp(['ammo','health','shield','weapon']),
+      veg: Array.from({length:rri(1,4)},function(){return {
+        off:rr(.1,.9), type:rp(['tree','crystal','mushroom','flower']),
+        sz:rr(.7,1.3), hue:rri(80,300)
       };})
     });
   }
@@ -1249,26 +1275,26 @@ function genWorld(){
   // Bridges
   for(var bi=0;bi<platforms.length-1;bi++){
     var a=platforms[bi], b=platforms[bi+1];
-    if(abs(a.cy-b.cy)<70 && pct(.55)){
+    if(abs(a.cy-b.cy)<70 && rchance(.55)){
       bridges.push({x1:a.x+a.w, y1:a.y, x2:b.x, y2:b.y, w:28});
     }
   }
 
   // Floating platforms
   for(var fi=0;fi<6;fi++){
-    var fw=rnd(55,90), fh=rnd(12,20);
-    var fx=rnd(80,W-80);
-    var fy=gy+rnd(-200,-70);
+    var fw=rr(55,90), fh=rr(12,20);
+    var fx=rr(80,WORLD_W-80);
+    var fy=gy+rr(-200,-70);
     platforms.push({
       x:fx-fw/2, y:fy, w:fw, h:fh, cx:fx, cy:fy,
-      layers:1, hue:pick([180,280,40]),
-      isCenter:false, hasChest:pct(.45), chestOpened:false,
-      chestType:pick(['ammo','health','shield','weapon']), veg:[]
+      layers:1, hue:rp([180,280,40]),
+      isCenter:false, hasChest:rchance(.45), chestOpened:false,
+      chestType:rp(['ammo','health','shield','weapon']), veg:[]
     });
   }
   var p1=platforms[0], p2=platforms[platforms.length-1];
-  if(p1&&p2){portals.push({x:p1.cx,y:p1.y-18,tx:p2.cx,ty:p2.y-18,biome:pick(['Neon Ruins','Toxic Marsh','Inferno Core'])});}
-  for(var ti=0;ti<3;ti++){var tp=pick(platforms);if(tp)traps.push({x:tp.cx+rnd(-20,20),y:tp.y-4,on:false});}
+  if(p1&&p2){portals.push({x:p1.cx,y:p1.y-18,tx:p2.cx,ty:p2.y-18,biome:rp(['Neon Ruins','Toxic Marsh','Inferno Core'])});}
+  for(var ti=0;ti<3;ti++){var tp=rp(platforms);if(tp)traps.push({x:tp.cx+rr(-20,20),y:tp.y-4,on:false});}
 }
 
 /* ══════════════════════════════════════════
@@ -1486,13 +1512,13 @@ function killE(e,crit){
   if(combo===8&&overdriveT<=0) activateOverdrive();
   if(combo>2) showFloat(W/2,H/2-60,combo+'x COMBO!','#ff2d78');
   if(eventState.exploders||e.ai==='suicide'){explode(e.x,e.y,70,20);}
-  if(pct(.35)) spawnPick(e.x,e.y,pick(['health','ammo','shield']));
+  if(rchance(.35)) spawnPick(e.x,e.y,pick(['health','ammo','shield']));
   if(e.boss||e.miniBoss){ if(e.name==='VOID EMPEROR'){secretBoss.defeated=true;unlockAch('void_emperor','Void Emperor Defeated');prog.title='Apex';prog.coins+=50;} 
     spawnPick(e.x-30,e.y,'health');spawnPick(e.x+30,e.y,'shield');spawnPick(e.x,e.y-20,'weapon');
     bossOn=false;bossRef=null;document.getElementById('bossbar').style.display='none';
   }
   if(enKilled>=enThisWave){
-    var r=pct(.05)?'legendary':pct(.2)?'epic':pct(.45)?'rare':'common';
+    var r=pct(.05)?'legendary':pct(.2)?'epic':rchance(.45)?'rare':'common';
     if(r==='legendary'||combo>=20||kills%40===0) spawnPick(P.x+rnd(-40,40),P.y-30,'weapon');
     prog.coins+=r==='legendary'?12:r==='epic'?7:r==='rare'?4:2;
     if(r==='legendary') announce('💰 LEGENDARY CHEST');
@@ -1520,7 +1546,7 @@ function collectPick(p){
       var newWeap={type:wt,name:wd.name+' ['+rv.n+']',icon:wd.icon,dmg:wd.dmg*rv.m,rate:wd.rate*(rr==='mythic'?0.86:1),spread:wd.spread,bul:wd.bul,spd:wd.spd,ammo:wd.maxA,maxA:wd.maxA,rld:wd.rld,range:wd.range,col:rv.col||wd.col,sz:wd.sz+(rr==='legendary'||rr==='mythic'?1:0),kb:wd.kb,rarity:rr};
       if(wd.expl) newWeap.expl=true;
       P.weaps.push(newWeap);
-      if(pct(.35)){applyItem({slot:'relic',name:pick(['Impact Core','Storm Capacitor','Flame Shell'])});}
+      if(rchance(.35)){applyItem({slot:'relic',name:pick(['Impact Core','Storm Capacitor','Flame Shell'])});}
       if(pct(.22)){applyItem({slot:'artifact',name:pick(['Chrono Lens','Titan Plate','Arc Heart'])});}
       showFloat(W/2,H/2,'+ '+newWeap.name.toUpperCase(),'#b040ff');
       buildWBar();
@@ -2514,13 +2540,13 @@ function update(){
   collidePlatforms(P);
 
   // World bounds X
-  P.x = clamp(P.x, 30, W-30);
+  P.x = clamp(P.x, 30, (WORLD_W||W)-30);
 
   // Anim
   if(abs(P.vx)>.4&&P.grounded){P.anim+=.16; if(cosmetics.trail!=='none'&&frameN%3===0) emitP(P.x,P.y,2,cosmetics.trail==='arc'?'#66e0ff':'#ff66aa',1.2,10,1.5);}
 
   // Void death
-  if(P.y > H*.72 + VOID_DEPTH) hurtPlayer(P.hp+P.sh+1);
+  if(P.y > (WORLD_H||H)*.72 + VOID_DEPTH) hurtPlayer(P.hp+P.sh+1);
 
   // Invuln
   if(P.invuln>0) P.invuln--;
@@ -2767,7 +2793,7 @@ function draw(t){
 function initGame(){
   var cls=CLASSES[selClass];
   runBuffs={dmg:1,spd:1,combo:1,shield:0};
-  selectMapTheme();
+  if(selMode==='pvp_online'||selMode==='coop_online'){mapSet='Arena Online'; mapFx={meteor:0,toxic:0,lowG:0,turret:0};} else selectMapTheme();
   genWorld();
 
   var center=platforms.find(function(p){return p.isCenter;})||platforms[0];
