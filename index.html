@@ -459,7 +459,7 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,rx:0,ry:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
-var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0,pollTimer:0,lastPollAt:0,sendBusy:false};
+var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0,pollTimer:0,lastPollAt:0,sendBusy:false,lastSendAt:0};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var onboarding={seen:false};
@@ -806,7 +806,7 @@ function resolveOnlineRound(winnerSid,roundNum){
 }
 function disconnectOnline(){
   if(pvpOnline.chan){try{pvpOnline.chan.close();}catch(e){} pvpOnline.chan=null;}
-  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0; pvpOnline.sendBusy=false; if(pvpOnline.pollTimer){clearInterval(pvpOnline.pollTimer);pvpOnline.pollTimer=0;}
+  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0; pvpOnline.sendBusy=false; pvpOnline.lastSendAt=0; if(pvpOnline.pollTimer){clearInterval(pvpOnline.pollTimer);pvpOnline.pollTimer=0;}
 }
 
 function pushRemoteSnapshot(d){
@@ -840,6 +840,7 @@ function pushRemoteSnapshot(d){
     if(snap.recvTs<snaps[snaps.length-1].recvTs) snap.recvTs=snaps[snaps.length-1].recvTs+0.001;
   }
   if(snap.seq){
+    if(pvpOnline.lastRemoteSeq>0 && snap.seq<=pvpOnline.lastRemoteSeq) return false;
     if(pvpOnline.lastRemoteSeq>0 && snap.seq>pvpOnline.lastRemoteSeq+1){
       var miss=snap.seq-(pvpOnline.lastRemoteSeq+1);
       pvpOnline.packetLoss=clamp((pvpOnline.packetLoss||0)*0.9 + miss*3,0,100);
@@ -849,6 +850,9 @@ function pushRemoteSnapshot(d){
   snaps.push(snap);
   pvpOnline.lastRemoteTs=snap.simTs;
   if(snaps.length>pvpOnline.snapMax) snaps.splice(0,snaps.length-pvpOnline.snapMax);
+  // keep network target hot even before render interpolation step
+  pvpState.p2.x=snap.x; pvpState.p2.y=snap.y;
+  return true;
 }
 
 function applyRemoteSmoothing(){
@@ -1027,8 +1031,8 @@ function onOnlinePacket(d){
   if(!d) return;
   if(d.sid&&pvpOnline.sid&&d.sid===pvpOnline.sid) return;
   if(d.type==='state'){
-    if(d.seq&&pvpOnline.lastRemoteSeq&&d.seq<pvpOnline.lastRemoteSeq) return;
-    pushRemoteSnapshot(d);
+    var accepted=pushRemoteSnapshot(d);
+    if(!accepted) return;
     if(d.sid) pvpOnline.enemySid=d.sid;
     pvpOnline.lastRx=performance.now(); pvpOnline.connected=true;
     if(selMode==='pvp_online'&&!pvpMatch.live&&pvpMatch.round===1&&state==='playing') startOnlineRound();
@@ -1210,13 +1214,15 @@ function sendOnlineState(extra){
     pvpOnline.lastSentState=payload;
   }
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
-    if(payload.type==='state'&&pvpOnline.sendBusy) return;
-    if(payload.type==='state') pvpOnline.sendBusy=true;
-    fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})})
+    if(payload.type==='state'&&pvpOnline.sendBusy && (Date.now()-(pvpOnline.lastSendAt||0))<1200) return;
+    if(payload.type==='state'){ pvpOnline.sendBusy=true; pvpOnline.lastSendAt=Date.now(); }
+    var sctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+    var stid=sctrl?setTimeout(function(){try{sctrl.abort();}catch(e){}},900):0;
+    fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload}), signal:sctrl?sctrl.signal:undefined})
       .then(function(r){if(!r.ok&&r.status===404){pvpOnline.connected=false;} return r.ok?r.json():null;})
       .then(function(j){ if(j&&j.ack) onOnlinePacket(j.ack); })
       .catch(function(){})
-      .finally(function(){ if(payload.type==='state') pvpOnline.sendBusy=false; });
+      .finally(function(){ if(stid) clearTimeout(stid); if(payload.type==='state') pvpOnline.sendBusy=false; });
     return;
   }
   if(pvpOnline.transport==='bc'&&pvpOnline.chan){pvpOnline.chan.postMessage(payload);}
