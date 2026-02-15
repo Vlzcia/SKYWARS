@@ -460,7 +460,7 @@ var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,rx:0,ry:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
 var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0,pollTimer:0,lastPollAt:0,sendBusy:false,lastSendAt:0};
-var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
+var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0,started:false};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var onboarding={seen:false};
 var storyState={chapter:1,goalWave:6,done:false,kills:0};
@@ -762,13 +762,14 @@ function buildAvatarSel(){
 
 
 function resetPvpOnlineMatch(){
-  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0};
+  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,started:false};
   pvpOnline.enemySid='';
   pvpOnline.snapshots=[]; pvpOnline.netPts=[]; pvpOnline.packetLoss=0; pvpOnline.jitterMs=0; pvpOnline.lastRemoteSeq=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0;
   pvpStats.shots=0; pvpStats.hits=0; pvpStats.kills=0; pvpStats.deaths=0; pvpStats.hitFx=0;
   pvpMatch.afkTimer=8; if(pvpMatch.nextRoundTimer) clearTimeout(pvpMatch.nextRoundTimer); pvpMatch.nextRoundTimer=0;
 }
 function startOnlineRound(){
+  pvpMatch.started=true;
   genWorld();
   bullets=[]; particles=[]; explosions=[]; grenades=[];
   var center=platforms.find(function(p){return p.isCenter;})||platforms[0];
@@ -1035,7 +1036,7 @@ function onOnlinePacket(d){
     if(!accepted) return;
     if(d.sid) pvpOnline.enemySid=d.sid;
     pvpOnline.lastRx=performance.now(); pvpOnline.connected=true;
-    if(selMode==='pvp_online'&&!pvpMatch.live&&pvpMatch.round===1&&state==='playing') startOnlineRound();
+    if(selMode==='pvp_online'&&!pvpMatch.started&&pvpMatch.round===1&&state==='playing') startOnlineRound();
     return;
   }
   if(d.type==='hit'&&state==='playing'&&selMode==='pvp_online'){
