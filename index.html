@@ -459,7 +459,7 @@ var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
 var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
-var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0};
+var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0,pollTimer:0,lastPollAt:0,sendBusy:false};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
 var onboarding={seen:false};
@@ -806,7 +806,7 @@ function resolveOnlineRound(winnerSid,roundNum){
 }
 function disconnectOnline(){
   if(pvpOnline.chan){try{pvpOnline.chan.close();}catch(e){} pvpOnline.chan=null;}
-  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0;
+  pvpOnline.transport='none'; pvpOnline.connected=false; pvpOnline.sid=''; pvpOnline.relayBusy=false; pvpOnline.enemySid=''; pvpOnline.snapshots=[]; pvpOnline.pingMs=0; pvpOnline.rejoinBusy=false; pvpOnline.lastSentState=null; pvpOnline.lastAckSeq=0; pvpOnline.corrX=0; pvpOnline.corrY=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0; pvpOnline.sendBusy=false; if(pvpOnline.pollTimer){clearInterval(pvpOnline.pollTimer);pvpOnline.pollTimer=0;}
 }
 
 function pushRemoteSnapshot(d){
@@ -1113,7 +1113,7 @@ function connectRelay(room,nick,onFail){
     pvpOnline.connecting=false;
     setConnectBtnBusy(false);
     if(!j||!j.sid){onFail();return;}
-    pvpOnline.sid=j.sid; pvpOnline.transport='relay'; pvpOnline.connected=true; pvpOnline.lastErr=''; pvpOnline.snapshots=[];
+    pvpOnline.sid=j.sid; pvpOnline.transport='relay'; pvpOnline.connected=true; pvpOnline.lastErr=''; pvpOnline.snapshots=[]; ensurePollLoop();
     if(m) m.textContent='Online 1v1 conectado · sala '+room+' como '+nick+' (esperando rival)';
   }).catch(function(err){
     pvpOnline.connecting=false;
@@ -1133,9 +1133,14 @@ function connectBroadcast(room,nick){
   if(m)m.textContent='Online PvP local (fallback) sala '+room+' como '+nick;
 }
 function pollRelay(){
-  if(pvpOnline.transport!=='relay'||!pvpOnline.sid||pvpOnline.relayBusy) return;
+  if(pvpOnline.transport!=='relay'||!pvpOnline.sid) return;
+  // watchdog: if previous poll got stuck, release lock so loop can recover
+  if(pvpOnline.relayBusy && (Date.now()- (pvpOnline.lastPollAt||0)) < 1200) return;
   pvpOnline.relayBusy=true;
-  fetch('/online/poll?room='+encodeURIComponent(pvpOnline.room)+'&sid='+encodeURIComponent(pvpOnline.sid))
+  pvpOnline.lastPollAt=Date.now();
+  var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  var timeoutId=setTimeout(function(){ if(ctrl) ctrl.abort(); }, 900);
+  fetch('/online/poll?room='+encodeURIComponent(pvpOnline.room)+'&sid='+encodeURIComponent(pvpOnline.sid), ctrl?{signal:ctrl.signal}:undefined)
     .then(function(r){
       if(r.status===404){
         pvpOnline.connected=false;
@@ -1149,7 +1154,14 @@ function pollRelay(){
     })
     .then(function(j){(j.events||[]).forEach(onOnlinePacket);})
     .catch(function(){})
-    .finally(function(){pvpOnline.relayBusy=false;});
+    .finally(function(){clearTimeout(timeoutId); pvpOnline.relayBusy=false;});
+}
+function ensurePollLoop(){
+  if(pvpOnline.pollTimer) clearInterval(pvpOnline.pollTimer);
+  pvpOnline.pollTimer=setInterval(function(){
+    if(!pvpOnline.on||pvpOnline.transport!=='relay'||!pvpOnline.sid) return;
+    pollRelay();
+  }, 80);
 }
 function buildOnlineSel(force){
   var m=document.getElementById('onlineMeta'); if(!m) return;
@@ -1199,10 +1211,13 @@ function sendOnlineState(extra){
     pvpOnline.lastSentState=payload;
   }
   if(pvpOnline.transport==='relay'&&pvpOnline.sid){
+    if(payload.type==='state'&&pvpOnline.sendBusy) return;
+    if(payload.type==='state') pvpOnline.sendBusy=true;
     fetch('/online/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({room:pvpOnline.room,sid:pvpOnline.sid,payload:payload})})
       .then(function(r){if(!r.ok&&r.status===404){pvpOnline.connected=false;} return r.ok?r.json():null;})
       .then(function(j){ if(j&&j.ack) onOnlinePacket(j.ack); })
-      .catch(function(){});
+      .catch(function(){})
+      .finally(function(){ if(payload.type==='state') pvpOnline.sendBusy=false; });
     return;
   }
   if(pvpOnline.transport==='bc'&&pvpOnline.chan){pvpOnline.chan.postMessage(payload);}
@@ -2513,7 +2528,6 @@ function update(){
       pvpOnline.stateSeq=(pvpOnline.stateSeq||0)+1;
       sendOnlineState({type:'state',seq:pvpOnline.stateSeq,x:round(P.x*10)/10,y:round(P.y*10)/10,vx:round(P.vx*10)/10,hp:round(P.hp),dead:P.hp<=0,score:pvpMatch.my,grounded:P.grounded,anim:round(P.anim*100)/100,facing:P.facing,vy:round(P.vy*10)/10,aimX:round(mWorld.x),aimY:round(mWorld.y),wi:P.wi,clientTs:Date.now()});
     }
-    if(frameN%2===0) pollRelay();
     if(frameN%120===0) sendPingSample();
     var om=document.getElementById('onlineMeta');
     if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}
