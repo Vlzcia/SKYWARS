@@ -762,9 +762,9 @@ function buildAvatarSel(){
 
 
 function resetPvpOnlineMatch(){
-  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,started:false};
+  pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0,started:false};
   pvpOnline.enemySid='';
-  pvpOnline.snapshots=[]; pvpOnline.netPts=[]; pvpOnline.packetLoss=0; pvpOnline.jitterMs=0; pvpOnline.lastRemoteSeq=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0;
+  pvpOnline.snapshots=[]; pvpOnline.netPts=[]; pvpOnline.packetLoss=0; pvpOnline.jitterMs=0; pvpOnline.lastRemoteSeq=0; pvpOnline.sendAcc=0; pvpOnline.lastRemoteTs=0; pvpOnline.corrX=0; pvpOnline.corrY=0;
   pvpStats.shots=0; pvpStats.hits=0; pvpStats.kills=0; pvpStats.deaths=0; pvpStats.hitFx=0;
   pvpMatch.afkTimer=8; if(pvpMatch.nextRoundTimer) clearTimeout(pvpMatch.nextRoundTimer); pvpMatch.nextRoundTimer=0;
 }
@@ -1062,6 +1062,7 @@ function onOnlinePacket(d){
     return;
   }
   if(d.type==='state_ack'&&d.seq){
+    if(selMode==='pvp_online' && (!pvpMatch.started || !pvpMatch.live)) return;
     if(d.seq>= (pvpOnline.lastAckSeq||0)){
       pvpOnline.lastAckSeq=d.seq;
       var dx=(Number(d.x||P.x)-P.x), dy=(Number(d.y||P.y)-P.y);
@@ -2540,7 +2541,7 @@ function update(){
     if(om&&performance.now()-pvpOnline.lastRx>6000){om.textContent='Online '+(selMode==='coop_online'?'CO-OP':'PVP')+': esperando rival en '+pvpOnline.room+'...';}
   }
   if((selMode==='pvp_online'||selMode==='coop_online')&&pvpOnline.on) applyRemoteSmoothing();
-  if(selMode==='pvp_online'&&pvpOnline.on) applyLocalCorrections();
+  if(selMode==='pvp_online'&&pvpOnline.on&&pvpMatch.started&&pvpMatch.live&&pvpOnline.connected) applyLocalCorrections();
   if(selMode==='pvp_online'&&pvpMatch.live&&pvpOnline.enemySid){
     var silence=performance.now()-pvpOnline.lastRx;
     if(silence>12000){
@@ -2550,6 +2551,7 @@ function update(){
     } else pvpMatch.afkTimer=8;
   }
   if(selMode==='pvp_online'){
+    if(!pvpMatch.live && pvpMatch.started && pvpMatch.respawnT<=0){ pvpMatch.live=true; announce('FIGHT!'); sfx(760,.09,'square',.08,.8); }
     if(pvpMatch.respawnT>0){
       pvpMatch.respawnT--;
       if(pvpMatch.respawnT===60) sfx(520,.05,'triangle',.07,.9);
