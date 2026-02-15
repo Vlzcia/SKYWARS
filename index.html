@@ -458,7 +458,7 @@ var base={core:1,trophy:0,lab:1,training:1};
 var director={pressure:1,assist:0};
 var ghost={active:false,x:0,y:0,retrieved:false};
 var weekly={goal:3,progress:0,reward:10};
-var pvpState={on:false,p2:{x:0,y:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
+var pvpState={on:false,p2:{x:0,y:0,rx:0,ry:0,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:0,aimY:0,wi:0,shotSeq:0}};
 var pvpOnline={on:false,room:'',nick:'',chan:null,sid:'',transport:'none',lastRx:0,connected:false,relayBusy:false,enemySid:'',connecting:false,lastErr:'',snapshots:[],renderDelay:120,snapMax:60,pingMs:0,lastPingAt:0,rejoinBusy:false,stateSeq:0,lastRemoteSeq:0,packetLoss:0,jitterMs:0,netPts:[],lastSentState:null,lastAckSeq:0,corrX:0,corrY:0,sendHz:20,sendAcc:0,maxExtrapMs:140,lastRemoteTs:0,pollTimer:0,lastPollAt:0,sendBusy:false};
 var pvpMatch={round:1,maxRounds:5,my:0,enemy:0,live:false,lastResolved:0,timeMax:120,timeLeft:120,spawnFlip:false,respawnT:0,afkTimer:8,nextRoundTimer:0};
 var pvpStats={shots:0,hits:0,kills:0,deaths:0,hitFx:0,lastHitDmg:0,history:[]};
@@ -775,7 +775,7 @@ function startOnlineRound(){
   pvpMatch.spawnFlip=!pvpMatch.spawnFlip;
   var off=pvpMatch.spawnFlip?90:-90;
   P.hp=P.mhp; P.sh=0; P.invuln=120; P.x=center.cx-off; P.y=center.y-2; P.vx=0; P.vy=0;
-  pvpState.p2.x=center.cx+off; pvpState.p2.y=center.y-2; pvpState.p2.hp=pvpState.p2.mhp||120;
+  pvpState.p2.x=center.cx+off; pvpState.p2.y=center.y-2; pvpState.p2.rx=pvpState.p2.x; pvpState.p2.ry=pvpState.p2.y; pvpState.p2.hp=pvpState.p2.mhp||120;
   pvpMatch.timeLeft=pvpMatch.timeMax;
   pvpMatch.live=false;
   pvpMatch.respawnT=180;
@@ -899,23 +899,22 @@ function applyRemoteSmoothing(){
     base=last;
   }
 
-  var dx=tx-(p2.x||tx), dy=ty-(p2.y||ty);
-  var dist=hypot(dx,dy);
-  if(dist>320){
-    p2.x=tx; p2.y=ty;
+  p2.x=tx; p2.y=ty;
+  if(!Number.isFinite(p2.rx)) p2.rx=p2.x;
+  if(!Number.isFinite(p2.ry)) p2.ry=p2.y;
+  var rdx=p2.x-p2.rx, rdy=p2.y-p2.ry;
+  var rdist=hypot(rdx,rdy);
+  if(rdist>480){
+    p2.rx=p2.x; p2.ry=p2.y;
   } else {
-    var posLerp=dist>120?0.35:0.18;
-    p2.x=(p2.x||tx)+dx*posLerp;
-    p2.y=(p2.y||ty)+dy*posLerp;
+    var dtMs=clamp(window.__frameDtMs||16.6,8,40);
+    var catchup=1-exp(-dtMs*(rdist>140?0.030:0.018));
+    p2.rx += rdx*catchup;
+    p2.ry += rdy*catchup;
+    if(base&&base.grounded===false&&abs(p2.y-p2.ry)>20) p2.ry += clamp(p2.y-p2.ry,-18,18);
   }
-  p2.vx=lerp(p2.vx||0,tvx,0.2);
-  p2.vy=lerp(p2.vy||0,tvy,0.2);
-
-  if(base){
-    if(base.grounded===false && abs(ty-p2.y)>24){
-      p2.y += clamp(ty-p2.y,-24,24);
-    }
-  }
+  p2.vx=lerp(p2.vx||0,tvx,0.22);
+  p2.vy=lerp(p2.vy||0,tvy,0.22);
 }
 
 function pvpAddHitFeedback(dmg){
@@ -2829,7 +2828,8 @@ function draw(t){
     var p2=pvpState.p2;
     var rCols={base:(selMode==='coop_online'?'#66ffaa':'#ff66aa'),neo:'#88ffcc',shadow:'#9a8cff',gold:'#ffd530'};
     var rWeapon=P.weaps[p2.wi||0]||P.weaps[0];
-    drawHumanoidPlr({x:p2.x,y:p2.y,w:P.w,h:P.h,grounded:p2.grounded!==false,anim:p2.anim||0,vy:p2.vy||0,facing:p2.facing||1},{}, {aimX:p2.aimX||p2.x+30,aimY:p2.aimY||p2.y-20,col:rCols.shadow,avatar:AVATARS.nessi,weapon:rWeapon,name:p2.name||'Rival'});
+    var rx=Number.isFinite(p2.rx)?p2.rx:p2.x, ry=Number.isFinite(p2.ry)?p2.ry:p2.y;
+    drawHumanoidPlr({x:rx,y:ry,w:P.w,h:P.h,grounded:p2.grounded!==false,anim:p2.anim||0,vy:p2.vy||0,facing:p2.facing||1},{}, {aimX:p2.aimX||rx+30,aimY:p2.aimY||ry-20,col:rCols.shadow,avatar:AVATARS.nessi,weapon:rWeapon,name:p2.name||'Rival'});
   }
   if(ghost.active){var gx=ghost.x-cam.x+W/2,gy=ghost.y-cam.y+H/2;X.globalAlpha=.45;X.fillStyle='#b6f2ff';X.beginPath();X.arc(gx,gy-14,10,0,TAU);X.fill();X.globalAlpha=1;}
   for(di=0;di<enemies.length;di++) drawEnemyFn(enemies[di],t);
@@ -2886,7 +2886,7 @@ function initGame(){
   bullets=[];enemies=[];particles=[];pickups=[];explosions=[];turrets=[];grenades=[];
   score=0;kills=0;wave=0;combo=0;comboT=0;maxCombo=0;dmgDealt=0;
   bossOn=false;bossRef=null;shake=0;slowT=0;slowF=1;overdriveT=0;vfxPulse=0;hitFlash=0;superE=35;chronoT=0;stormT=0;stormTick=0;
-  superCD={nova:0,chrono:0,storm:0}; modeTimeLeft=300; eventState={name:'',t:0,meteor:0,storm:0,toxic:0,exploders:0}; ghost={active:false,x:0,y:0,retrieved:false}; secretBoss.spawned=false; pvpState.p2={x:P.x+120,y:P.y,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:P.x+150,aimY:P.y-20,wi:0,shotSeq:0};
+  superCD={nova:0,chrono:0,storm:0}; modeTimeLeft=300; eventState={name:'',t:0,meteor:0,storm:0,toxic:0,exploders:0}; ghost={active:false,x:0,y:0,retrieved:false}; secretBoss.spawned=false; pvpState.p2={x:P.x+120,y:P.y,rx:P.x+120,ry:P.y,vx:0,vy:0,hp:120,mhp:120,name:'Rival',grounded:true,anim:0,facing:1,aimX:P.x+150,aimY:P.y-20,wi:0,shotSeq:0};
   enKilled=0;enThisWave=0;frameN=0;
 
   document.getElementById('bossbar').style.display='none';
