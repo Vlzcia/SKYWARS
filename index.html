@@ -2520,7 +2520,8 @@ function update(){
   if(P.focus&&P.focusT>0)P.focusT--;
 
   // ---- Player Movement ----
-  var canControl=!(selMode==='pvp_online'&&(!pvpMatch.live||P.hp<=0));
+  var canControl=!(selMode==='pvp_online'&&P.hp<=0);
+  var canFire=canControl && !(selMode==='pvp_online'&&!pvpMatch.live);
   var mx=0;
   if(canControl&& (keys.a||keys.arrowleft)) mx-=1;
   if(canControl&& (keys.d||keys.arrowright)) mx+=1;
@@ -2620,7 +2621,7 @@ function update(){
   P.sta=min(P.msta,P.sta+(P.grounded?0.35:0.18));
 
   // Shooting
-  if(canControl&&(mDown||mobFire)){
+  if(canFire&&(mDown||mobFire)){
     if(mobFire&&!mDown){
       var tgt=autoAim();
       if(tgt){mWorld.x=tgt.x;mWorld.y=tgt.y-tgt.h/2;P.facing=tgt.x>P.x?1:-1;}
@@ -2914,7 +2915,7 @@ function initGame(){
   cam.x=P.x;cam.y=P.y-H*.16;
 
   if(selMode==='story'){playCine('CHAPTER '+story.chapter,'Entrando al sector '+mapSet+' · objetivo wave '+storyState.goalWave,1700,function(){announce('🚀 DEPLOYING TO '+mapSet.toUpperCase());slowT=36;slowF=.65;setTimeout(nextWave,700);});}
-  else if(selMode==='pvp_online'){resetPvpOnlineMatch(); announce('⚔ PVP ONLINE 1v1 · espera al rival'); slowT=18; slowF=.8;}
+  else if(selMode==='pvp_online'){resetPvpOnlineMatch(); if(pvpOnline.connected) startOnlineRound(); announce('⚔ PVP ONLINE 1v1 · espera al rival'); slowT=18; slowF=.8;}
   else {announce('🚀 DEPLOYING TO '+mapSet.toUpperCase());slowT=40; slowF=.6; setTimeout(nextWave,900);} 
 }
 
