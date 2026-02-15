@@ -19,6 +19,18 @@ const rooms = new Map(); // room -> Map(sid -> {nick,queue:[]})
 const REJOIN_GRACE_MS = 90000;
 const ONLINE_WORLD_W = 1600;
 const ONLINE_WORLD_H = 900;
+const CORR_LOG_WINDOW_MS = 1000;
+const corrStats = { windowStart: Date.now(), total:0, corrected:0, byRoom:{} };
+function noteCorrection(room, corrected){
+  const now = Date.now();
+  if(now - corrStats.windowStart > CORR_LOG_WINDOW_MS){
+    corrStats.windowStart = now; corrStats.total = 0; corrStats.corrected = 0; corrStats.byRoom = {};
+  }
+  corrStats.total++;
+  if(corrected) corrStats.corrected++;
+  const r = corrStats.byRoom[room] || (corrStats.byRoom[room]={total:0,corrected:0});
+  r.total++; if(corrected) r.corrected++;
+}
 
 const DB_FILE = path.join(ROOT, 'data', 'online-db.json');
 let db = { users:{}, rooms:{} };
@@ -144,11 +156,15 @@ const server = http.createServer(async (req, res) => {
         const ry = Number.isFinite(py) ? py : prev.y;
         const sx = Math.max(20, Math.min(ONLINE_WORLD_W-20, rx));
         const sy = Math.max(0, Math.min(ONLINE_WORLD_H + 260, ry));
+        const correctionDx = sx - rx;
+        const correctionDy = sy - ry;
+        const corrected = (correctionDx*correctionDx + correctionDy*correctionDy) > 0.5*0.5;
+        noteCorrection(room, corrected);
         sender.lastState={x:sx,y:sy,ts:now};
         sender.stateHist = sender.stateHist || [];
         sender.stateHist.push({x:sx,y:sy,ts:now});
         if(sender.stateHist.length>45) sender.stateHist.splice(0, sender.stateHist.length-45);
-        ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(sx*2)/2, y:Math.round(sy*2)/2, serverTs:now };
+        ack = { type:'state_ack', seq:Number(payload.seq||0), x:Math.round(sx*2)/2, y:Math.round(sy*2)/2, serverTs:now, corrected, corrDx:Math.round(correctionDx*10)/10, corrDy:Math.round(correctionDy*10)/10 };
       }
       if(payload && payload.type==='shot'){
         const sx=Number(payload.x), sy=Number(payload.y);
@@ -235,7 +251,8 @@ const server = http.createServer(async (req, res) => {
       for (const c of r.values()) maxAge = Math.max(maxAge, now - c.lastSeen);
       staleMs = maxAge;
     }
-    sendJson(res, 200, { ok:true, players:r?r.size:0, knownUsers:Object.keys(db.users).length, staleMs });
+    const corrRoom = corrStats.byRoom[room] || { total:0, corrected:0 };
+    sendJson(res, 200, { ok:true, players:r?r.size:0, knownUsers:Object.keys(db.users).length, staleMs, correctionsPerSec:corrRoom.corrected, stateSamplesPerSec:corrRoom.total, correctionRatio:corrRoom.total?Number((corrRoom.corrected/corrRoom.total).toFixed(3)):0 });
     return;
   }
 
