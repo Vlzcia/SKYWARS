@@ -88,6 +88,17 @@ function sampleStateAt(hist, ts){
   return { x: prev.x + (next.x-prev.x)*t, y: prev.y + (next.y-prev.y)*t, ts };
 }
 
+function fileSig(file){
+  try{
+    const b = fs.readFileSync(file);
+    const head = b.slice(0, 4096).toString('utf8');
+    const titleMatch = head.match(/<title>([^<]+)<\/title>/i);
+    return { ok:true, file, bytes:b.length, mtime:fs.statSync(file).mtimeMs, title:titleMatch?titleMatch[1]:'', sig:require('crypto').createHash('sha1').update(b).digest('hex').slice(0,12) };
+  }catch(e){
+    return { ok:false, file, error:'not_found' };
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
 
@@ -241,6 +252,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (u.pathname === '/online/served-file' && req.method === 'GET') {
+    const rootIndex = path.resolve(ROOT, 'index.html');
+    const publicIndex = path.resolve(ROOT, 'public', 'index.html');
+    const requestedPath = decodeURIComponent(u.searchParams.get('path') || '/index.html');
+    const rel = requestedPath.replace(/^\/+/,'');
+    const resolved = path.resolve(ROOT, rel);
+    sendJson(res, 200, {
+      ok:true,
+      cwd: process.cwd(),
+      root: ROOT,
+      resolvedRequest: resolved,
+      rootIndex: fileSig(rootIndex),
+      publicIndex: fileSig(publicIndex),
+      requested: fileSig(resolved)
+    });
+    return;
+  }
+
   if (u.pathname === '/online/status' && req.method === 'GET') {
     const room = sanitizeRoom(u.searchParams.get('room') || '');
     const r = rooms.get(room);
@@ -279,5 +308,8 @@ setInterval(()=>{
 },10000);
 
 server.listen(PORT, '0.0.0.0', () => {
+  const rootIndex = path.resolve(ROOT, 'index.html');
+  const f = fileSig(rootIndex);
   console.log('Skywars online server on http://0.0.0.0:' + PORT);
+  console.log('Serving / from:', rootIndex, 'sig='+ (f.ok?f.sig:'missing'), 'title='+ (f.ok?f.title:'N/A'));
 });
