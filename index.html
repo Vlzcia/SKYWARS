@@ -1061,8 +1061,9 @@ function onOnlinePacket(d){
     if(d.seq>= (pvpOnline.lastAckSeq||0)){
       pvpOnline.lastAckSeq=d.seq;
       var dx=(Number(d.x||P.x)-P.x), dy=(Number(d.y||P.y)-P.y);
-      if(abs(dx)>0.35) pvpOnline.corrX=(pvpOnline.corrX||0)+dx;
-      if(abs(dy)>0.35) pvpOnline.corrY=(pvpOnline.corrY||0)+dy;
+      // only reconcile meaningful divergences; ignore micro jitter to avoid perpetual correction loops
+      if(abs(dx)>2.2) pvpOnline.corrX=clamp((pvpOnline.corrX||0)+dx,-120,120);
+      if(abs(dy)>2.2) pvpOnline.corrY=clamp((pvpOnline.corrY||0)+dy,-120,120);
     }
     return;
   }
